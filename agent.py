@@ -1,273 +1,223 @@
+#!/usr/bin/env python3
 """
-GitMesh: Autonomous 3D Technical Art Pipeline Agent (CI/CD for Game Assets)
-Phase 1: Core Agent Skeleton & GitLab MCP Integration
+GitMesh: Headless Autonomous 3D Technical Art Pipeline Agent.
 
-This script initializes the Model Context Protocol (MCP) client to connect
-to the GitLab MCP Server, lists available GitLab actions, registers dummy stubs
-for 3D generation, and configures the Google GenAI Engine (Gemini 3.1) with these tools.
+Built using the Google Agent Development Kit (ADK) and Model Context Protocol (MCP).
+This agent serves as a pure headless background worker for GitLab CI/CD, monitoring
+issue boards, automatically generating reference assets, reconstructing 3D shapes,
+and committing rigged meshes back to the repos.
 """
 
 import os
 import sys
 import asyncio
 import logging
-from typing import Dict, List, Any, Optional
+from typing import List, Dict, Any, Optional
 
-# Highest Risk Integration imports: Python MCP SDK
-try:
-    from mcp import ClientSession, StdioServerParameters
-    from mcp.client.stdio import stdio_client
-except ImportError:
-    print("Warning: 'mcp' Python SDK is not installed in current environment. Mock classes will be generated.", file=sys.stderr)
-    ClientSession = None
-    StdioServerParameters = None
-    stdio_client = None
+# Load environment variables
+from dotenv import load_dotenv
+load_dotenv()
 
-# Google GenAI SDK imports
-try:
-    from google import genai
-    from google.genai import types
-except ImportError:
-    print("Warning: 'google-genai' SDK is not installed in current environment. Proceeding with standard fallback bindings.", file=sys.stderr)
-    genai = None
-    types = None
-
-# Configure logging
+# Configure logger
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)]
 )
-logger = logging.getLogger("GitMeshAgent")
+logger = logging.getLogger("GitMeshHeadlessAgent")
 
+# Try importing the Google Agent Development Kit (ADK)
+try:
+    import google_adk as adk
+    from google_adk import Agent
+    logger.info("✅ Successfully imported google-adk (Google Agent Development Kit).")
+except ImportError:
+    logger.warning("⚠️ 'google-adk' package not found in current environment. Setting up dry-run fallback classes.")
+    # Mock fallback classes for local systems development & dry-run compliance
+    class MockAgent:
+        def __init__(self, model: str, system_instruction: str, tools: List[Any]):
+            self.model = model
+            self.system_instruction = system_instruction
+            self.tools = tools
+            logger.info(f"Initialized MockAgent with model {model} and {len(tools)} tools.")
+
+        async def generate_content(self, prompt: str) -> str:
+            tool_names = [getattr(t, "__name__", str(t)) for t in self.tools]
+            return (
+                f"[Simulation Test Response from Gemini 3.1 Flash with tools: {', '.join(tool_names)}]\n"
+                f"Resolved prompt: '{prompt}' by calling generate_3d_mesh and GitLab MCP connectors."
+            )
+    adk = sys.modules[__name__]  # self-reference placeholder
+    Agent = MockAgent
+
+# Try importing Model Context Protocol (MCP) Python SDK
+try:
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+    logger.info("✅ Successfully imported mcp SDK.")
+except ImportError:
+    logger.warning("⚠️ 'mcp' SDK not found in current environment. Setting up dry-run fallback layers.")
+    ClientSession = None
+    StdioServerParameters = None
+    stdio_client = None
 
 # =====================================================================
-# Phase 1: Tool Definitions (Core Technical Art Pipeline Stubs)
+# Dummy Pipeline Tools (Core Technical Art 3D Engine Stubs)
 # =====================================================================
 
-def imagen_tool(prompt: str) -> str:
+def generate_3d_mesh(prompt: str, style: str = "lowpoly") -> str:
     """
-    Generates high-fidelity 2D reference art from a detailed prompt.
-    Uses Google's Imagen model via Vertex AI / Gemini Image Generation.
-    
+    Generates a high-quality 3D mesh asset (.glb) using serverless AI endpoints.
+    Invokes 2D concept generation followed by point-cloud shape reconstruction.
+
     Args:
-        prompt (str): Described text prompt for the asset (e.g., 'Low-poly pirate chest').
-        
+        prompt (str): Detailed prompt of the 3D game prop (e.g., 'Lowpoly Medieval Viking Sword').
+        style (str): Visual constraint filter for topology/shading ('lowpoly', 'stylized', 'realistic').
+
     Returns:
-        str: Temporary cloud storage URL (GCS/S3) containing the generated PNG image.
+        str: Direct cloud URL containing the compiled, ready-to-rig game GLB mesh file.
     """
-    # MOCKED FOR PHASE 1; Core logic will be built in Phase 2.
-    logger.info(f"🎨 [Imagen] Generating 2D concept reference artwork for: '{prompt}'")
-    return "https://storage.googleapis.com/gitmesh-assets-sandbox/reference_chest.png"
-
-
-def fal_trellis_tool(image_url: str) -> str:
-    """
-    Converts a 2D reference image into a detailed 3D mesh (.glb).
-    Invokes Fal.ai serverless container running the Trellis 2 model.
-    
-    Args:
-        image_url (str): The GCS/HTTP link returned by the imagen_tool reference stage.
-        
-    Returns:
-        str: Direct download URL for the reconstructed raw 3D mesh .glb file.
-    """
-    # MOCKED FOR PHASE 1; Core logic will be built in Phase 2.
-    logger.info(f"📐 [Fal.ai Trellis] Reconstructing raw 3D mesh from: {image_url}")
-    return "https://api.fal.ai/files/gitmesh-output-raw/chest_mesh_raw.glb"
-
-
-def modal_blender_tool(model_url: str, animation_type: str = "idle") -> str:
-    """
-    Runs a serverless, headless Blender + P3-SAM container in Modal.
-    Optimizes geometry, generates clean UV mappings, bakes PBR texture maps,
-    and mathematically bakes skeletal/keyframe animations based on the type.
-    
-    Args:
-        model_url (str): Reconstructed raw 3D mesh .glb link.
-        animation_type (str): Rigging & movement instruction (e.g., 'idle', 'open', 'attack').
-        
-    Returns:
-        str: High-quality, compressed, optimized .glb URL ready for game-engine insertion.
-    """
-    # MOCKED FOR PHASE 1; Core logic will be built in Phase 2.
-    logger.info(f"🎬 [Blender on Modal] Triggering mesh optimization, material baking, and rigging animation [{animation_type}] for: {model_url}")
-    return "https://modal.run/gitmesh-blender-service/chest_animated_final.glb"
+    logger.info(f"🎨 [Pipeline Tool] Invoking generate_3d_mesh for prompt: '{prompt}' (style: {style})")
+    slug = prompt.lower().replace(" ", "_")
+    return f"https://api.fal.ai/files/gitmesh-pipeline/{slug}_{style}.glb"
 
 
 # =====================================================================
-# Model Context Protocol Client Orchestrator
+# GitLab MCP Pipeline Connection Orchestration
 # =====================================================================
-
-class GitMeshAgentConfig:
-    """Holds configuration parameters and credentials for the GitMesh Core Agent."""
-    def __init__(self):
-        # Read keys; default to developer defaults if not set in environment
-        self.gemini_api_key = os.getenv("GEMINI_API_KEY", "MOCK_DEVELOPER_KEY")
-        self.gitlab_token = os.getenv("GITLAB_PRIVATE_TOKEN", "MOCK_GITLAB_TOKEN")
-        self.gitlab_url = os.getenv("GITLAB_API_URL", "https://gitlab.com")
-        
-    def validate(self) -> bool:
-        """Helper to run a diagnostics pre-check of required keys."""
-        logger.info("Running environment diagnostics checks...")
-        if not self.gemini_api_key or self.gemini_api_key == "MOCK_DEVELOPER_KEY":
-            logger.warning("[⚠️ Verification] GEMINI_API_KEY is unset or Mocked. Live agent calls will fail.")
-        else:
-            logger.info("🔑 GEMINI_API_KEY detected.")
-            
-        if not self.gitlab_token or self.gitlab_token == "MOCK_GITLAB_TOKEN":
-            logger.warning("[⚠️ Verification] GITLAB_PRIVATE_TOKEN is unset or Mocked. GitLab commits will fail.")
-        else:
-            logger.info("🛠️ GITLAB_PRIVATE_TOKEN detected.")
-            
-        return True
-
 
 async def connect_gitlab_mcp() -> Optional[Any]:
     """
-    Sets up the stdio_client connection to the GitLab MCP server
-    using 'npx @gitlab/mcp-server-gitlab' inside a shell context.
-    
-    This is the core integration point with GitLab acting as the OS.
-    
+    Establishes an asynchronous stdio transport connection to the GitLab Duo MCP server.
+    Spawns 'npx -y @gitlab/mcp-server-gitlab' with proper credentials injected.
+
     Returns:
-        The established mcp_session client context manager or None if integration fails.
+        The stdio stream client wrapper context manager if successful, None otherwise.
     """
-    logger.info("Preparing GitLab MCP integration channel via npx subprocess...")
-    
-    if stdio_client is None:
-        logger.error("❌ Cannot setup stdio_client: MCP SDK is missing.")
+    if stdio_client is None or StdioServerParameters is None:
+        logger.warning("⚠️ MCP library is missing. Cannot establish live GitLab Duo MCP subprocess context.")
         return None
-        
-    # Standard MCP server execution parameters
+
+    # Retrieve environment variables for auth config
+    private_token = os.getenv("GITLAB_PRIVATE_TOKEN", "MOCK_DEVELOPPTION_TOKEN")
+    api_url = os.getenv("GITLAB_API_URL", "https://gitlab.com")
+
+    # Parameters to spawn GitLab MCP server via npx subprocess
     server_params = StdioServerParameters(
         command="npx",
         args=["-y", "@gitlab/mcp-server-gitlab"],
         env={
             **os.environ,
-            "GITLAB_PRIVATE_TOKEN": os.getenv("GITLAB_PRIVATE_TOKEN", "MOCK_GITLAB_TOKEN"),
-            "GITLAB_API_URL": os.getenv("GITLAB_API_URL", "https://gitlab.com")
+            "GITLAB_PRIVATE_TOKEN": private_token,
+            "GITLAB_API_URL": api_url
         }
     )
-    
-    logger.info(f"Constructed GitLab MCP Command: {server_params.command} {' '.join(server_params.args)}")
-    
+
+    logger.info(f"🚀 Spawning GitLab MCP server on subprocess: npx -y @gitlab/mcp-server-gitlab")
     try:
-        # stdio_client sets up standard input/output pipelines to communicate with the sub-process
-        # This is the standard, official pattern for STDIO transport in MCP.
-        # It spawns the command and channels messages across standard stdin/stdout descriptors.
+        # standard stdio client establishes bidirectional pipeline (stdin/stdout) to sub-process
         return stdio_client(server_params)
     except Exception as e:
-        logger.error(f"❌ Critical failure connecting to GitLab MCP stdio_client process: {e}")
+        logger.error(f"❌ Failed to instantiate stdio transport connection: {e}")
         return None
 
 
 # =====================================================================
-# Phase 1 Main Agent Bootstrap
+# Main Header Execution Loop
 # =====================================================================
 
 async def main():
-    logger.info("=== STARTING GITMESH PIPELINE AGENT - PHASE 1 INITIALIZATION ===")
-    
-    # Instantiate layout parameters
-    config = GitMeshAgentConfig()
-    config.validate()
-    
-    # 1. Initialize Google Gemini Server-side Engine
-    gemini_client = None
-    if genai:
-        try:
-            # Connect to Gemini 3.1 Flash brain
-            gemini_client = genai.Client(api_key=config.gemini_api_key)
-            logger.info("✅ Google GenAI SDK Client successfully established.")
-        except Exception as e:
-            logger.error(f"❌ Failed to initialize Google GenAI SDK client: {e}")
-    else:
-        logger.warning("[⚠️ SDK Warning] Running in sandbox mode without active 'google-genai' libraries.")
+    logger.info("Initializing Headless GitMesh Pipeline Agent...")
 
-    # 2. Setup the GitLab MCP Client and list dynamic tools
+    # Load and validate key configuration variables
+    gitlab_token = os.getenv("GITLAB_PRIVATE_TOKEN")
+    gemini_key = os.getenv("GEMINI_API_KEY")
+
+    if not gitlab_token:
+        logger.warning("💡 GITLAB_PRIVATE_TOKEN not found in environment. Defaulting to mock token for dry-run.")
+    if not gemini_key:
+        logger.warning("💡 GEMINI_API_KEY not found in environment. Vertex/Gemini requests will run mock fallback.")
+
+    # 1. Attempt Connection to GitLab Duo MCP Server
     gitlab_mcp_ctx = await connect_gitlab_mcp()
+    mcp_tools = []
+
+    if gitlab_mcp_ctx:
+        logger.info("🔄 Connecting to live GitLab MCP Session...")
+        try:
+            # Enter stdio transport loops
+            async with gitlab_mcp_ctx as (read_stream, write_stream):
+                # Init ClientSession Handshake protocols
+                async with ClientSession(read_stream, write_stream) as session:
+                    logger.info("🤝 Performing protocol handshake with GitLab Duo MCP...")
+                    await session.initialize()
+                    
+                    logger.info("📡 Retrieving GitLab Dynamic Actions & API Tools...")
+                    tools_response = await session.list_tools()
+                    mcp_tools = tools_response.tools if hasattr(tools_response, 'tools') else []
+                    
+                    logger.info(f"🎉 Connected! Dynamic GitLab MCP tools discovered: {[t.name for t in mcp_tools]}")
+                    
+                    # Run the active agent loop within the standard context session
+                    await initialize_adk_agent_and_test(mcp_tools)
+                    return
+        except Exception as e:
+            logger.error(f"❌ Connection error during live GitLab MCP initialization: {e}")
+            logger.info("Falling back to simulated pipeline dry-run...")
+    else:
+        logger.info("Running standard dry-run simulation mode (Active Local Pipeline).")
+
+    # 2. Run simulation loop if live subprocess is not configured/supported
+    await initialize_adk_agent_and_test(mcp_tools=[])
+
+
+async def initialize_adk_agent_and_test(mcp_tools: List[Any]):
+    """
+    Initializes the Google ADK Agent using gemini-3.1-flash, combining
+    the static generate_3d_mesh tool and dynamic tools retrieved from GitLab MCP.
+    """
+    logger.info("🛠️ Building combined workflow toolbelt...")
     
-    if gitlab_mcp_ctx is None:
-        logger.warning("[⚠️ Simulation Triggered] GitLab MCP process is not accessible. Running validation test-pipe...")
-        _simulate_agent_execution()
-        return
+    # Combined list: Core pipeline tools + GitLab MCP dynamic tools
+    combined_tools = [generate_3d_mesh] + mcp_tools
+    
+    system_instruction = (
+        "You are GitMesh, a headless AI Technical Art pipeline agent operating autonomously via GitLab CI/CD: "
+        "1) Scan and monitor technical specification issues on repository boards (e.g., labels: asset:generate). "
+        "2) Coordinate 3D shape reconstruction via generate_3d_mesh. "
+        "3) Commit rigged asset .glb outputs back to the target project using available GitLab MCP tools."
+    )
 
-    logger.info("Connecting to GitLab MCP stream and retrieving active tools...")
+    logger.info("🧠 Instantiating Google ADK Agent (Model: gemini-3.1-flash)...")
     try:
-        # Connect asynchronously to stdio streams and establish the client session
-        async with gitlab_mcp_ctx as (read_stream, write_stream):
-            if ClientSession is None:
-                raise ImportError("mcp SDK ClientSession is not available.")
-                
-            async with ClientSession(read_stream, write_stream) as mcp_session:
-                # Handshake & protocol capabilities verification
-                logger.info("Initiating protocol details Exchange...")
-                await mcp_session.initialize()
-                logger.info("🎉 Session established! Retrieving GitLab capability tools...")
-                
-                # Dynamic discovery of GitLab workspace tools (e.g., search_issues, create_commit, post_comment)
-                tools_response = await mcp_session.list_tools()
-                gitlab_tools = tools_response.tools if hasattr(tools_response, 'tools') else []
-                
-                logger.info(f"📡 Found {len(gitlab_tools)} GitLab MCP action tools available:")
-                for index, tool in enumerate(gitlab_tools, 1):
-                    logger.info(f"  [{index}] Tool Name: '{tool.name}' - {tool.description[:60]}...")
-                
-                # 3. Assemble full toolbelt (Local 3D Art Pipeline Stubs + Dynamic GitLab APIs)
-                pipeline_tools = [imagen_tool, fal_trellis_tool, modal_blender_tool]
-                combined_mcp_and_pipeline_tools = pipeline_tools + list(gitlab_tools)
-                
-                logger.info(f"🛠️ Complete GitMesh Toolbelt Assembled: {len(combined_mcp_and_pipeline_tools)} total tools bindable.")
-                
-                # 4. Bind complete tool configuration to high-level Gemini Agent
-                if gemini_client:
-                    logger.info("Injecting dynamic GitLab + Pipeline tools list into Gemini 3.1 Flash Brain...")
-                    
-                    # Instantiate autonomous system instructions
-                    system_prompt = (
-                        "You are GitMesh, a 3D technical art pipeline agent. Your job is to act as a GitLab CI/CD loop: "
-                        "1) Read asset-request issues. "
-                        "2) Generate reference art (imagen_tool). "
-                        "3) Build 3D glb geometry (fal_trellis_tool). "
-                        "4) Calculate skeletal rigs & compile final assets (modal_blender_tool). "
-                        "5) Commit files & update status notes directly to GitLab using your GitLab MCP tools."
-                    )
-                    
-                    # Generate config with tools declared for function calling
-                    agent_config = types.GenerateContentConfig(
-                        model="gemini-3.1-flash",
-                        system_instruction=system_prompt,
-                        tools=combined_mcp_and_pipeline_tools,
-                        temperature=0.2
-                    )
-                    
-                    logger.info("🧠 Gemini 3.1 Agent Skeleton pre-configured & fully prepared for automated loops!")
-                    print("\n[SUCCESS] Phase 1 Skeleton initialized with standard tools configuration.")
-                else:
-                    logger.info("Skeleton bindings initialized. Setup completed successfully!")
-                    
+        # Initialize Google ADK Agent with combined workspace capabilities
+        agent = Agent(
+            model="gemini-3.1-flash",
+            system_instruction=system_instruction,
+            tools=combined_tools
+        )
+        logger.info("✅ Google ADK Agent initialized successfully.")
+        
+        # Test query to verify integration, planning capability, and mock output
+        test_issue_query = (
+            "Analyze GitLab Issue #42: 'Asset Request: Lowpoly Pirate Chest'. "
+            "Execute generate_3d_mesh, retrieve asset, and draft checkout post commit comment."
+        )
+        logger.info(f"📬 Submitting dry-run query to agent: '{test_issue_query}'")
+        
+        test_response = await agent.generate_content(test_issue_query)
+        print("\n" + "="*50)
+        print("          GITMESH HEADLESS AGENT TEST RESPONSE      ")
+        print("="*50)
+        print(test_response)
+        print("="*50 + "\n")
+        
     except Exception as e:
-        logger.error(f"❌ Exception occurred in main loop: {e}")
-        logger.warning("[⚠️ Connection Refused] Spawning backup pipeline visualization...")
-        _simulate_agent_execution()
-
-
-def _simulate_agent_execution():
-    """Fallback demonstration print detailing how the pipeline operates when MCP subprocess is mocked."""
-    print("\n--- GITMESH AUTONOMOUS PIPELINE PIPES SIMULATION ---")
-    print("[Pipeline Stage 1] Checking GitLab Issue #141 (Asset Request: 'Lowpoly Viking Chest')")
-    print("[Pipeline Stage 2] Triggering 'imagen_tool' -> Art generated: 'viking_chest_ref.png'")
-    print("[Pipeline Stage 3] Triggering 'fal_trellis_tool' -> 3D point cloud -> Reconstructed raw mesh 'chest_raw.glb'")
-    print("[Pipeline Stage 4] Triggering 'modal_blender_tool' -> Clean UV mapping, skeletal keyframes baked.")
-    print("[Pipeline Stage 5] Committing assets to GitLab repo 'game-assets/props/viking_chest.glb'")
-    print("[Pipeline Stage 6] Posting status comment with render preview directly on MR-42.")
-    print("--- PIPELINE SIMULATION COMPLETED ---\n")
+        logger.error(f"❌ Failed to execute ADK Agent cycle: {e}")
 
 
 if __name__ == "__main__":
-    # Standard asyncio run loop for Python 3.11+ async execution
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("Process interrupted by user.")
+        logger.info("Execution halted by user.")
