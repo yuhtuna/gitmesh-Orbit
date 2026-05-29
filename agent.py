@@ -26,14 +26,29 @@ logging.basicConfig(
 )
 logger = logging.getLogger("GitMeshHeadlessAgent")
 
-# Try importing the Google Agent Development Kit (ADK)
+# =====================================================================
+# Google Agent Development Kit (ADK) SDK Imports & Fallbacks
+# =====================================================================
 try:
     import google_adk as adk
-    from google_adk import Agent
+    from google_adk import Agent, Tool
     logger.info("✅ Successfully imported google-adk (Google Agent Development Kit).")
 except ImportError:
     logger.warning("⚠️ 'google-adk' package not found in current environment. Setting up dry-run fallback classes.")
+    
     # Mock fallback classes for local systems development & dry-run compliance
+    class MockTool:
+        def __init__(self, name: str, description: str, function: Any):
+            self.name = name
+            self.description = description
+            self.function = function
+
+        @staticmethod
+        def from_function(fn: Any) -> 'MockTool':
+            name = getattr(fn, "__name__", str(fn))
+            doc = getattr(fn, "__doc__", "No description provided.")
+            return MockTool(name=name, description=doc, function=fn)
+
     class MockAgent:
         def __init__(self, model: str, system_instruction: str, tools: List[Any]):
             self.model = model
@@ -42,13 +57,22 @@ except ImportError:
             logger.info(f"Initialized MockAgent with model {model} and {len(tools)} tools.")
 
         async def generate_content(self, prompt: str) -> str:
-            tool_names = [getattr(t, "__name__", str(t)) for t in self.tools]
+            tool_names = []
+            for t in self.tools:
+                if hasattr(t, "name"):
+                    tool_names.append(t.name)
+                elif hasattr(t, "__name__"):
+                    tool_names.append(t.__name__)
+                else:
+                    tool_names.append(str(t))
             return (
                 f"[Simulation Test Response from Gemini 3.1 Flash with tools: {', '.join(tool_names)}]\n"
-                f"Resolved prompt: '{prompt}' by calling generate_3d_mesh and GitLab MCP connectors."
+                f"Resolved prompt: '{prompt}' by invoking serverless Modal routines & GitLab MCP connectors."
             )
+            
     adk = sys.modules[__name__]  # self-reference placeholder
     Agent = MockAgent
+    Tool = MockTool
 
 # Try importing Model Context Protocol (MCP) Python SDK
 try:
@@ -61,21 +85,31 @@ except ImportError:
     StdioServerParameters = None
     stdio_client = None
 
-# Try importing Modal Client Library
+
+# =====================================================================
+# 1. Serverless GPU Technical Art App Imports from modal_app.py
+# =====================================================================
 try:
-    import modal
-    logger.info("✅ Successfully imported modal SDK.")
-except ImportError:
-    logger.warning("⚠️ 'modal' client SDK not found in current environment. Setting up mock fallbacks.")
-    modal = None
+    from modal_app import (
+        generate_3d_mesh as modal_generate_3d_mesh,
+        segment_mesh as modal_segment_mesh,
+        animate_and_render_mesh as modal_animate_and_render_mesh
+    )
+    logger.info("✅ Successfully imported serverless technical art functions from modal_app.py")
+except ImportError as e:
+    logger.warning(f"⚠️ Failed to import from modal_app.py direct definitions ({e}). Using inline mock fallbacks.")
+    modal_generate_3d_mesh = None
+    modal_segment_mesh = None
+    modal_animate_and_render_mesh = None
+
 
 # =====================================================================
-# Dummy Pipeline Tools (Core Technical Art 3D Engine Stubs)
+# 2. Pipeline Execution Tool Adapters
 # =====================================================================
 
-def generate_3d_mesh(prompt: str, style: str = "lowpoly") -> str:
+def run_generate_3d_mesh(prompt: str, style: str = "lowpoly") -> Dict[str, Any]:
     """
-    Generates a high-quality 3D mesh asset (.glb) using serverless AI endpoints on Modal.
+    Generates a high-quality 3D mesh asset (.glb) using the serverless Trellis 2 pipeline on Modal.
     Invokes 2D concept generation followed by point-cloud shape reconstruction.
 
     Args:
@@ -83,22 +117,107 @@ def generate_3d_mesh(prompt: str, style: str = "lowpoly") -> str:
         style (str): Visual constraint filter for topology/shading ('lowpoly', 'stylized', 'realistic').
 
     Returns:
-        str: Direct cloud URL containing the compiled, ready-to-rig game GLB mesh file.
+        dict: High-level technical art metadata holding file size, vertex counts, and storage GLB URL.
     """
-    logger.info(f"🎨 [Pipeline Tool] Invoking generate_3d_mesh for prompt: '{prompt}' (style: {style}) via Modal")
+    logger.info(f"🎨 [Pipeline Tool] Invoking generate_3d_mesh for: '{prompt}' (style: {style}) via Modal")
     
-    if modal is not None:
+    # If Modal client and function is properly imported, run container sandbox invocation
+    if modal_generate_3d_mesh is not None:
         try:
-            # Dynamically lookup standard registered technical art pipeline function on Modal
-            generate_mesh_fn = modal.Function.lookup("gitmesh-pipeline", "generate_mesh")
-            # In a live setting we would execute remote():
-            # url = generate_mesh_fn.remote(prompt, style)
-            logger.info("⚡ Successfully looked up 'gitmesh-pipeline' generate_mesh function on Modal")
+            # Use local/remote Modal invoker handles if available
+            if hasattr(modal_generate_3d_mesh, "local"):
+                return modal_generate_3d_mesh.local(prompt, style)
+            return modal_generate_3d_mesh(prompt, style)
         except Exception as e:
-            logger.warning(f"⚠️ Modal function lookup failed ({e}). Proceeding in simulation mode.")
+            logger.warning(f"⚠️ Modal execution failed during run_generate_3d_mesh ({e}). Proceeding in local mode.")
 
+    # Fallback local simulation placeholder mapping
     slug = prompt.lower().replace(" ", "_").replace("'", "")
-    return f"https://modal.com/artifacts/gitmesh-pipeline/{slug}_{style}.glb"
+    return {
+        "status": "success",
+        "url": f"https://modal.com/artifacts/gitmesh-pipeline/{slug}_{style}.glb",
+        "style": style,
+        "vertex_count": 4500,
+        "file_size_kb": 240.5,
+        "generator_model": "Simulation-Fallback-Trellis"
+    }
+
+
+def run_segment_mesh(glb_url: str, prompt_tags: str) -> Dict[str, Any]:
+    """
+    Submits a segmented part analysis request to the serverless P3-SAM model.
+    Divides a 3D GLB file into individual semantic parts or component sub-meshes (e.g., separating sword hilt, blade).
+
+    Args:
+        glb_url (str): Cloud target URL of the game GLB mesh file to segment.
+        prompt_tags (str): Comma-separated list of target part name tags (e.g., 'hilt, blade, guard').
+
+    Returns:
+        dict: Mapping containing segmented parts, relative indices, bounds and alignment vectors.
+    """
+    logger.info(f"✂️ [Pipeline Tool] Invoking P3-SAM segment_mesh for tagging: {prompt_tags}")
+
+    # If Modal client and function is properly imported, run container sandbox invocation
+    if modal_segment_mesh is not None:
+        try:
+            if hasattr(modal_segment_mesh, "local"):
+                return modal_segment_mesh.local(glb_url, prompt_tags)
+            return modal_segment_mesh(glb_url, prompt_tags)
+        except Exception as e:
+            logger.warning(f"⚠️ Modal execution failed during run_segment_mesh ({e}). Proceeding in local mode.")
+
+    # Fallback local simulation placeholder mapping
+    tags = [t.strip() for t in prompt_tags.split(",")]
+    parts_map = {tag: {"part_id": f"part_{i:03d}_{tag}", "index": i} for i, tag in enumerate(tags)}
+    return {
+        "status": "success",
+        "original_mesh_url": glb_url,
+        "detected_parts_count": len(tags),
+        "parts": parts_map,
+        "segment_pipeline": "Simulation-Fallback-SAM"
+    }
+
+
+def run_animate_and_render_mesh(glb_url: str, animation_plan_json: str) -> Dict[str, Any]:
+    """
+    Simulates or executes heavy-duty headless Blender animation rigging and MP4 video preview rendering on Modal container nodes.
+
+    Args:
+        glb_url (str): Target GLB reference asset source link.
+        animation_plan_json (str): Stringified JSON outline of animation transforms (e.g., '{"rotation_y": 360, "frames": 30}').
+
+    Returns:
+        dict: Cloud URL links mapped to the active rigid animated mesh model output and the rendered MP4 turntable.
+    """
+    logger.info(f"🎬 [Pipeline Tool] Invoking Headless Blender animate_and_render_mesh for: {glb_url}")
+
+    # Invoke live Modal container worker if available
+    if modal_animate_and_render_mesh is not None:
+        try:
+            if hasattr(modal_animate_and_render_mesh, "local"):
+                return modal_animate_and_render_mesh.local(glb_url, animation_plan_json)
+            return modal_animate_and_render_mesh(glb_url, animation_plan_json)
+        except Exception as e:
+            logger.warning(f"⚠️ Modal execution failed during run_animate_and_render_mesh ({e}). Proceeding in local mode.")
+
+    # Fallback local simulation routine
+    return {
+        "status": "success",
+        "animated_glb_url": f"https://modal.com/artifacts/gitmesh-compute/animated_{os.path.basename(glb_url)}",
+        "preview_video_url": f"https://modal.com/artifacts/gitmesh-compute/preview_{os.path.basename(glb_url).replace('.glb', '.mp4')}",
+        "total_frames_rendered": 24,
+        "render_engine": "Simulation-Fallback-Blender"
+    }
+
+
+# =====================================================================
+# 3. Wrapping native Python functions into Google ADK structural Tools
+# =====================================================================
+
+logger.info("🛠️ Wrapping technical art pipeline functions using Tool.from_function()...")
+trellis_3d_tool = Tool.from_function(run_generate_3d_mesh)
+sam_segment_tool = Tool.from_function(run_segment_mesh)
+blender_anim_tool = Tool.from_function(run_animate_and_render_mesh)
 
 
 # =====================================================================
@@ -118,7 +237,7 @@ async def connect_gitlab_mcp() -> Optional[Any]:
         return None
 
     # Retrieve environment variables for auth config
-    private_token = os.getenv("GITLAB_PRIVATE_TOKEN", "MOCK_DEVELOPPTION_TOKEN")
+    private_token = os.getenv("GITLAB_PRIVATE_TOKEN", "MOCK_DEVELOPTION_TOKEN")
     api_url = os.getenv("GITLAB_API_URL", "https://gitlab.com")
 
     # Parameters to spawn GitLab MCP server via npx subprocess
@@ -134,7 +253,7 @@ async def connect_gitlab_mcp() -> Optional[Any]:
 
     logger.info(f"🚀 Spawning GitLab MCP server on subprocess: npx -y @gitlab/mcp-server-gitlab")
     try:
-        # standard stdio client establishes bidirectional pipeline (stdin/stdout) to sub-process
+        # Standard stdio client establishes bidirectional pipeline (stdin/stdout) to sub-process
         return stdio_client(server_params)
     except Exception as e:
         logger.error(f"❌ Failed to instantiate stdio transport connection: {e}")
@@ -193,18 +312,30 @@ async def main():
 async def initialize_adk_agent_and_test(mcp_tools: List[Any]):
     """
     Initializes the Google ADK Agent using gemini-3.1-flash, combining
-    the static generate_3d_mesh tool and dynamic tools retrieved from GitLab MCP.
+    the wrapped serverless Modal tech-art tools and dynamic tools retrieved from GitLab MCP.
     """
-    logger.info("🛠️ Building combined workflow toolbelt...")
+    logger.info("🛠️ Building combined workflow toolbelt with injected Modal tools...")
     
-    # Combined list: Core pipeline tools + GitLab MCP dynamic tools
-    combined_tools = [generate_3d_mesh] + mcp_tools
+    # 4. Inject wrapped Modal tools into combined workflow belt alongside GitLab dynamic tools
+    combined_tools = [trellis_3d_tool, sam_segment_tool, blender_anim_tool] + mcp_tools
     
     system_instruction = (
-        "You are GitMesh, a headless AI Technical Art pipeline agent operating autonomously via GitLab CI/CD: "
-        "1) Scan and monitor technical specification issues on repository boards (e.g., labels: asset:generate). "
-        "2) Coordinate 3D shape reconstruction via generate_3d_mesh. "
-        "3) Commit rigged asset .glb outputs back to the target project using available GitLab MCP tools."
+        "You are GitMesh, a highly expert autonomous AI Technical Art pipeline agent operating as a headless CI/CD worker integrated into GitLab via MCP. "
+        "Your absolute protocol is to follow this exact 10-step sequence whenever a new issue or asset request is processed. "
+        "You must output detailed step-by-step progress and you are strictly forbidden from skipping any of the following GitLab UI update and comment steps:\n\n"
+        "STEPS TO FOLLOW:\n"
+        "-----------------\n"
+        "Step 1: Read and analyze the user's 3D asset request. Use available GitLab MCP tools to create a new Git branch and a Merge Request (MR) associated with the task.\n"
+        "Step 2: Use the GitLab MCP commenting tool to post an initial comment to the created MR: 'Initializing GitMesh Pipeline: Generating base 3D mesh...'\n"
+        "Step 3: Execute the 'run_generate_3d_mesh' tool with an appropriate prompt and style constraint derived from the request specifications.\n"
+        "Step 4: Use the GitLab MCP commenting tool to post a progression comment to the MR: 'Mesh generated. Segmenting semantic parts...'\n"
+        "Step 5: Execute the 'run_segment_mesh' tool to partition the generated GLB asset into logical sub-meshes.\n"
+        "Step 6: Autonomously calculate/compile a precise math animation plan parameters payload in valid JSON format based specifically on the structural asset type. "
+        "(For example, if the asset is a chest, generate a hinge rotation on local axes; if it is a sword, generate a turntable twist or slice motion).\n"
+        "Step 7: Use the GitLab MCP commenting tool to post a progression comment to the MR: 'Applying procedural rigging and rendering preview...'\n"
+        "Step 8: Execute the 'run_animate_and_render_mesh' tool passing the segmented GLB URL and your generated JSON animation plan.\n"
+        "Step 9: Use the GitLab MCP 'push_files' or equivalent commit tooling to push the final rigged and animated '.glb' model file along with the rendered turntable preview '.mp4' file into the repository branch.\n"
+        "Step 10: Post a final conclusive comment on the MR confirming delivery containing references/links (e.g., Markdown video pointers) to the compiled assets, and update the MR status/metadata to transition the MR state into 'ready for review' to complete your operational cycle."
     )
 
     logger.info("🧠 Instantiating Google ADK Agent (Model: gemini-3.1-flash)...")
@@ -220,9 +351,11 @@ async def initialize_adk_agent_and_test(mcp_tools: List[Any]):
         # Test query to verify integration, planning capability, and mock output
         test_issue_query = (
             "Analyze GitLab Issue #42: 'Asset Request: Lowpoly Pirate Chest'. "
-            "Execute generate_3d_mesh, retrieve asset, and draft checkout post commit comment."
+            "Execute run_generate_3d_mesh for 'Lowpoly Pirate Chest', segment the output mesh into "
+            "'lid, base, lock' using run_segment_mesh, animate and render the keyframes using "
+            "run_animate_and_render_mesh for 30 frames with 360 degree turntable loop, and post a final draft checkout comment with the turntable MP4 link."
         )
-        logger.info(f"📬 Submitting dry-run query to agent: '{test_issue_query}'")
+        logger.info(f"📬 Submitting query of work to agent: '{test_issue_query}'")
         
         test_response = await agent.generate_content(test_issue_query)
         print("\n" + "="*50)
