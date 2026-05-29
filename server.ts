@@ -28,6 +28,19 @@ app.get("/", async (req, res) => {
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <script>
+    // Defensive polyfill for environments that try to override window.fetch but fail due to read-only property constraints.
+    try {
+      const nativeFetch = window.fetch;
+      Object.defineProperty(window, 'fetch', {
+        value: nativeFetch,
+        writable: true,
+        configurable: true
+      });
+    } catch (e) {
+      console.warn("Failed to redefine window.fetch:", e);
+    }
+  </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>GitMesh — Headless AI Agent Pipeline</title>
