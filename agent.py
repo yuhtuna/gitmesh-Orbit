@@ -342,7 +342,7 @@ async def initialize_adk_agent_and_test(mcp_tools: List[Any]):
     try:
         # Initialize Google ADK Agent with combined workspace capabilities
         agent = Agent(
-            model="gemini-3.1-flash",
+            model="gemini-3.5-flash",
             system_instruction=system_instruction,
             tools=combined_tools
         )
