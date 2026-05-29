@@ -8,6 +8,34 @@ const PORT = 3000;
 
 app.use(express.json());
 
+// Webhook listener for GitLab issues
+app.post("/webhook", (req, res) => {
+  // Immediately return 200 OK so the webhook doesn't time out
+  res.status(200).send("OK");
+  
+  // Extract issue description and title
+  let issueText = "";
+  if (req.body && req.body.object_attributes) {
+    const title = req.body.object_attributes.title || "Untitled Issue";
+    const description = req.body.object_attributes.description || "";
+    issueText = `Analyze GitLab Issue: ${title}\n\n${description}`;
+  } else {
+    issueText = `Analyze GitLab Issue payload: ${JSON.stringify(req.body)}`;
+  }
+
+  console.log("[Webhook] Triggering agent.py for issue payload...");
+  const pythonProc = spawn("python3", ["agent.py", issueText], {
+    env: {
+      ...process.env,
+      PYTHONUNBUFFERED: "1",
+    },
+  });
+
+  pythonProc.stdout.on("data", (data) => console.log(`[Agent stdout]: ${data.toString()}`));
+  pythonProc.stderr.on("data", (data) => console.error(`[Agent stderr]: ${data.toString()}`));
+  pythonProc.on("close", (code) => console.log(`[Agent exited] Code: ${code}`));
+});
+
 // Main HTML view to monitor and interact with the headless Python Agent
 app.get("/", async (req, res) => {
   let agentCode = "";

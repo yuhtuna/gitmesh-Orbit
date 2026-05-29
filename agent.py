@@ -349,15 +349,19 @@ async def initialize_adk_agent_and_test(mcp_tools: List[Any]):
         logger.info("✅ Google ADK Agent initialized successfully.")
         
         # Test query to verify integration, planning capability, and mock output
-        test_issue_query = (
-            "Analyze GitLab Issue #42: 'Asset Request: Lowpoly Pirate Chest'. "
-            "Execute run_generate_3d_mesh for 'Lowpoly Pirate Chest', segment the output mesh into "
-            "'lid, base, lock' using run_segment_mesh, animate and render the keyframes using "
-            "run_animate_and_render_mesh for 30 frames with 360 degree turntable loop, and post a final draft checkout comment with the turntable MP4 link."
-        )
-        logger.info(f"📬 Submitting query of work to agent: '{test_issue_query}'")
+        # Fallback: If no command-line argument is provided (e.g., during manual testing), fall back to a default mock string.
+        if len(sys.argv) > 1:
+            issue_query = sys.argv[1]
+        else:
+            issue_query = (
+                "Analyze GitLab Issue #42: 'Asset Request: Lowpoly Pirate Chest'. "
+                "Execute run_generate_3d_mesh for 'Lowpoly Pirate Chest', segment the output mesh into "
+                "'lid, base, lock' using run_segment_mesh, animate and render the keyframes using "
+                "run_animate_and_render_mesh for 30 frames with 360 degree turntable loop, and post a final draft checkout comment with the turntable MP4 link."
+            )
+        logger.info(f"📬 Submitting query of work to agent: '{issue_query}'")
         
-        test_response = await agent.generate_content(test_issue_query)
+        test_response = await agent.generate_content(issue_query)
         print("\n" + "="*50)
         print("          GITMESH HEADLESS AGENT TEST RESPONSE      ")
         print("="*50)
