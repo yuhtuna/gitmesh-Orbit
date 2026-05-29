@@ -1,7 +1,0 @@
-fastapi>=0.110.0
-uvicorn>=0.28.0
-google-adk>=0.1.0
-mcp>=0.1.0
-modal>=0.62.0
-python-dotenv>=1.0.1
-pydantic>=2.6.0

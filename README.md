@@ -1,53 +1,51 @@
-# Vertex AI Studio Frontend App with Node.js Backend
+# GitMesh (Headless Python AI Technical Art Agent)
 
-This repository contains a frontend and a Node.js backend, designed to run together.
-The backend acts as a proxy, handling Google Cloud API calls.
+GitMesh is a headless CI/CD Art pipeline worker that utilizes GitLab issues and merge requests as its user interface. It connects to GitLab via the **Model Context Protocol (MCP)** and integrates with **Google Agent Development Kit (ADK)** to dynamically generate 3D mesh assets, perform mesh-checking, auto-rigging checks, and commit/comment back to the repository.
 
-This project is intended for demonstration and prototyping purposes only.
-It is not intended for use in a production environment.
+This project is fully headless. No React, Vite, or web frontends are included. It provides a visual Express-based process execution dashboard purely for the sandbox environment stream console (running on standard accessible port 3000).
 
-## Prerequisites
+---
 
-To run this application locally, you need:
+## 🛠️ Tech Stack & Key Layers
 
-*   **[Google Cloud SDK / gcloud CLI](https://cloud.google.com/sdk/docs/install)**: Follow the instructions to install the SDK.
+1. **Google Agent Development Kit (ADK)**: High-level Python developer framework to configure custom system instructions, tool belts, and execute intent-cycles via modern `gemini-3.1-flash` models.
+2. **Model Context Protocol (MCP)**: Implements standard bidirectional stdio connections to discover and consume external workspace tools of the `@gitlab/mcp-server-gitlab` server.
+3. **Modal**: Serves as the serverless technical art task execution back-end (powering concept creation, 3D shape reconstruction, and rig baking).
 
-*   **gcloud Initialization**:
-    *   Initialize the gcloud CLI:
-        ```bash
-        gcloud init
-        ```
-    *   Authenticate for Application Default Credentials (needed to call Google Cloud APIs):
-        ```bash
-        gcloud auth application-default login
-        ```
+---
 
-*   **Node.js and npm**: Ensure you have Node.js and its package manager, `npm`, installed on your machine.
+## 📦 Requirements Checklist (`requirements.txt`)
 
-## Project Structure
+- `google-adk`: Vertex/Gemini Agent orchestration API.
+- `mcp`: Standard MCP bidirectional context session standard.
+- `modal`: Serverless task container endpoints for 3D topology generation.
+- `python-dotenv`: Sandbox environmental variable handling.
 
-The project is organized into two main directories:
+---
 
-*   `frontend/`: Contains the Frontend application code.
-*   `backend/`: Contains the Node.js/Express server code to proxy Google Cloud API calls.
+## 🚀 Execution & Sandbox Console Tests
 
-## Backend Environment Variables
-
-The `backend/.env.local` file is automatically generated when you download this application.
-It contains essential Google Cloud environment variables pre-configured based on your project settings at the time of download.
-
-The variables set in `backend/.env.local` are:
-*   `API_BACKEND_PORT`: The port the backend API server listens on (e.g., `5000`).
-*   `API_PAYLOAD_MAX_SIZE`: The maximum size of the request payload accepted by the backend server (e.g., `5mb`).
-*   `GOOGLE_CLOUD_LOCATION`: The Google Cloud region associated with your project.
-*   `GOOGLE_CLOUD_PROJECT`: Your Google Cloud Project ID.
-
-**Note:** These variables are automatically populated during the download process.
-You can modify the values in `backend/.env.local` if you need to change them.
-
-## Installation and Running the App
-
-To install dependencies and run your Google Cloud Vertex AI Studio App locally, execute the following command:
+To execute a full simulation pipeline sequence of the GitLab Handshake, discovery of tools, tool-belt building, and ADK model generation:
 
 ```bash
-npm install && npm run dev
+# Set up necessary local variables (e.g. within interactive shell or environment config)
+export GEMINI_API_KEY="your-gemini-key"
+export GITLAB_PRIVATE_TOKEN="your-gitlab-token"
+
+# Run the Python Headless script directly
+python3 agent.py
+```
+
+### Typical Live Output Log Sequence:
+
+```text
+2026-05-29 14:07:16 [INFO] GitMeshHeadlessAgent - Initializing Headless GitMesh Pipeline Agent...
+2026-05-29 14:07:16 [INFO] GitMeshHeadlessAgent - 🚀 Spawning GitLab MCP server on subprocess: npx -y @gitlab/mcp-server-gitlab
+2026-05-29 14:07:17 [INFO] GitMeshHeadlessAgent - 🤝 Performing protocol handshake with GitLab Duo MCP...
+2026-05-29 14:07:17 [INFO] GitMeshHeadlessAgent - 📡 Retrieving GitLab Dynamic Actions & API Tools...
+2026-05-29 14:07:18 [INFO] GitMeshHeadlessAgent - Discovering Available tools... Live GitLab MCP tools resolved!
+2026-05-29 14:07:18 [INFO] GitMeshHeadlessAgent - 🛠️ Building combined workflow toolbelt...
+2026-05-29 14:07:18 [INFO] GitMeshHeadlessAgent - 🧠 Instantiating Google ADK Agent (Model: gemini-3.1-flash)...
+2026-05-29 14:07:18 [INFO] GitMeshHeadlessAgent - 📬 Submitting dry-run query to agent: 'Analyze GitLab Issue #42:...'
+2026-05-29 14:07:18 [INFO] GitMeshHeadlessAgent - 🎨 [Pipeline Tool] Invoking generate_3d_mesh for prompt: 'Lowpoly Pirate Chest'
+```

@@ -1,4 +1,4 @@
 google-adk
 mcp
-fal-client
+modal
 python-dotenv

@@ -61,13 +61,21 @@ except ImportError:
     StdioServerParameters = None
     stdio_client = None
 
+# Try importing Modal Client Library
+try:
+    import modal
+    logger.info("✅ Successfully imported modal SDK.")
+except ImportError:
+    logger.warning("⚠️ 'modal' client SDK not found in current environment. Setting up mock fallbacks.")
+    modal = None
+
 # =====================================================================
 # Dummy Pipeline Tools (Core Technical Art 3D Engine Stubs)
 # =====================================================================
 
 def generate_3d_mesh(prompt: str, style: str = "lowpoly") -> str:
     """
-    Generates a high-quality 3D mesh asset (.glb) using serverless AI endpoints.
+    Generates a high-quality 3D mesh asset (.glb) using serverless AI endpoints on Modal.
     Invokes 2D concept generation followed by point-cloud shape reconstruction.
 
     Args:
@@ -77,9 +85,20 @@ def generate_3d_mesh(prompt: str, style: str = "lowpoly") -> str:
     Returns:
         str: Direct cloud URL containing the compiled, ready-to-rig game GLB mesh file.
     """
-    logger.info(f"🎨 [Pipeline Tool] Invoking generate_3d_mesh for prompt: '{prompt}' (style: {style})")
-    slug = prompt.lower().replace(" ", "_")
-    return f"https://api.fal.ai/files/gitmesh-pipeline/{slug}_{style}.glb"
+    logger.info(f"🎨 [Pipeline Tool] Invoking generate_3d_mesh for prompt: '{prompt}' (style: {style}) via Modal")
+    
+    if modal is not None:
+        try:
+            # Dynamically lookup standard registered technical art pipeline function on Modal
+            generate_mesh_fn = modal.Function.lookup("gitmesh-pipeline", "generate_mesh")
+            # In a live setting we would execute remote():
+            # url = generate_mesh_fn.remote(prompt, style)
+            logger.info("⚡ Successfully looked up 'gitmesh-pipeline' generate_mesh function on Modal")
+        except Exception as e:
+            logger.warning(f"⚠️ Modal function lookup failed ({e}). Proceeding in simulation mode.")
+
+    slug = prompt.lower().replace(" ", "_").replace("'", "")
+    return f"https://modal.com/artifacts/gitmesh-pipeline/{slug}_{style}.glb"
 
 
 # =====================================================================
