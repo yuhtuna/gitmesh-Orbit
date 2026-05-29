@@ -1,0 +1,6 @@
+{
+  "name": "GitMesh",
+  "description": "An autonomous 3D technical art pipeline that functions as a GitLab CI/CD system for game assets, powered by Gemini 3.1 Flash and MCP.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
