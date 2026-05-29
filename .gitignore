@@ -6,3 +6,45 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Local Python virtual environments
+venv/
+.venv/
+
+# Compiled Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Distribution / packaging
+*.egg-info/
+pip-wheel-metadata/
+
+# Project spec and local docs (avoid committing internal specs)
+v1.4_full_spec.txt
+
+# Generated assets / build outputs
+outputs/
+artifacts/
+*.glb
+*.mp4
+*.png
+*.jpg
+*.zip
+
+# Node / npm logs and lockfiles (commented if you prefer tracking lockfile)
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+#package-lock.json
+
+# IDEs and editors
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS files
+Thumbs.db
+Desktop.ini

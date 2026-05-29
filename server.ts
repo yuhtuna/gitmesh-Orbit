@@ -1,4 +1,5 @@
 import express from "express";
+import "dotenv/config";
 import path from "path";
 import fs from "fs/promises";
 import { spawn } from "child_process";
@@ -24,7 +25,8 @@ app.post("/webhook", (req, res) => {
   }
 
   console.log("[Webhook] Triggering agent.py for issue payload...");
-  const pythonProc = spawn("python3", ["agent.py", issueText], {
+  const pythonCommand = process.platform === "win32" ? "python" : "python3";
+  const pythonProc = spawn(pythonCommand, ["agent.py", issueText], {
     env: {
       ...process.env,
       PYTHONUNBUFFERED: "1",
