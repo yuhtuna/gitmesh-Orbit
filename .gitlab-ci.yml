@@ -1,0 +1,22 @@
+stages:
+  - generate_3d
+
+variables:
+  # The issue title and description are injected dynamically by our Modal Webhook!
+  ISSUE_TITLE: "Fallback Prompt"
+  ISSUE_DESC: ""
+
+run_gitmesh_pipeline:
+  stage: generate_3d
+  image: python:3.10-slim
+  script:
+    - echo "Triggered by GitLab Issue!"
+    - echo "Issue Title => $ISSUE_TITLE"
+    - echo "Issue Description => $ISSUE_DESC"
+    - pip install modal
+    # Ensure you set MODAL_TOKEN_ID and MODAL_TOKEN_SECRET in your GitLab CI/CD Variables
+    - echo "Firing off Modal GPU tasks..."
+    # You can call your Modal functions using the modal CLI or python, e.g.:
+    # - modal run modal_app.py::generate_3d_mesh --prompt "$ISSUE_TITLE" --style "lowpoly"
+  only:
+    - triggers
