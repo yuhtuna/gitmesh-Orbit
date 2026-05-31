@@ -81,11 +81,11 @@ try:
         .env({"CXX": "clang++", "CC": "clang"})
         # Install PyTorch and xformers together so pip resolves them correctly against the CUDA 12.1 wheels
         .pip_install("torch==2.4.0", "torchvision", "torchaudio", "xformers", extra_options="--index-url https://download.pytorch.org/whl/cu121")
-        # Explicitly install remaining packages
+        # Pin transformers to a version compatible with PyTorch 2.4.0 (newer versions require torch.distributed.tensor.device_mesh from PT 2.5+)
         .pip_install(
             "imageio", "pillow", "huggingface_hub", "spconv-cu121", 
             "viser", "fpsample", "trimesh", "numba", "gradio", "safetensors", "easydict", "rembg", "onnxruntime", 
-            "transformers", "accelerate", "diffusers", "scipy", "tqdm", "opencv-python", "ninja", "requests", 
+            "transformers==4.44.2", "accelerate", "diffusers", "scipy", "tqdm", "opencv-python", "ninja", "requests", 
             "xatlas", "pymcubes", "google-generativeai"
         )
         .run_commands(
