@@ -29,7 +29,7 @@ try:
         .pip_install(
             "imageio", "pillow", "huggingface_hub", "spconv-cu121", 
             "viser", "fpsample", "trimesh", "numba", "gradio", "safetensors", "easydict", "rembg", "onnxruntime", 
-            "transformers", "accelerate", "diffusers", "scipy", "tqdm", "opencv-python", "ninja", 
+            "transformers", "accelerate", "diffusers", "scipy", "tqdm", "opencv-python", "ninja", "requests", 
             "xatlas", "pymcubes"
         )
         .run_commands(
@@ -79,7 +79,7 @@ except ImportError:
     secrets=[modal.Secret.from_name("gitmesh-keys")] if modal else [],
     volumes={"/mnt/data": storage_volume} if storage_volume else {}
 )
-def generate_3d_mesh(prompt: str, style: str = "lowpoly") -> Dict[str, Any]:
+def generate_3d_mesh(prompt: str, style: str = "lowpoly", issue_iid: str = None, gitlab_token: str = None) -> Dict[str, Any]:
     """
     Serverless GPU function running Trellis pipeline locally in the container.
     Appends /trellis to sys.path, imports real Trellis generation, 
@@ -166,9 +166,46 @@ def generate_3d_mesh(prompt: str, style: str = "lowpoly") -> Dict[str, Any]:
     output_url = glb_path  # Now persisting the actual persistent volume file path
 
     print(f"✅ [Modal GPU Serverless] 3D mesh successfully compiled locally. Asset bound to: {output_url}")
+
+    # If CI provided an Issue IID and GitLab token, attempt to upload the GLB
+    uploaded_url = None
+    gitlab_project_id = os.environ.get("GITLAB_PROJECT_ID", "82717291")
+    if issue_iid and gitlab_token:
+        try:
+            import requests
+            upload_api = f"https://gitlab.com/api/v4/projects/{gitlab_project_id}/uploads"
+            headers = {"PRIVATE-TOKEN": gitlab_token}
+            with open(output_url, "rb") as fh:
+                files = {"file": (os.path.basename(output_url), fh)}
+                r = requests.post(upload_api, headers=headers, files=files)
+
+            if r.ok:
+                upload_json = r.json()
+                url_path = upload_json.get("url")
+                if url_path and url_path.startswith("/"):
+                    uploaded_url = f"https://gitlab.com{url_path}"
+                else:
+                    uploaded_url = url_path
+
+                # Post a comment linking to the uploaded file
+                note_api = f"https://gitlab.com/api/v4/projects/{gitlab_project_id}/issues/{issue_iid}/notes"
+                note_body = f"✅ **Generation Complete!** Model saved: {uploaded_url}"
+                rn = requests.post(note_api, headers=headers, data={"body": note_body})
+
+                # Close the issue
+                close_api = f"https://gitlab.com/api/v4/projects/{gitlab_project_id}/issues/{issue_iid}"
+                rc = requests.put(close_api, headers=headers, data={"state_event": "close"})
+
+                print("GitLab upload/comment/close status:", r.status_code, rn.status_code if 'rn' in locals() else None, rc.status_code if 'rc' in locals() else None)
+            else:
+                print("GitLab upload failed:", r.status_code, r.text)
+        except Exception as e:
+            print("Error while uploading to GitLab:", e)
+
     return {
         "status": "success",
         "url": output_url,
+        "upload_url": uploaded_url,
         "style": style,
         "vertex_count": 14200 if style == "lowpoly" else 58000,
         "file_size_kb": round(file_size_bytes / 1024, 2),
