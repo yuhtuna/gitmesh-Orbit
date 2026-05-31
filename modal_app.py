@@ -30,7 +30,7 @@ try:
             "imageio", "pillow", "huggingface_hub", "spconv-cu121", 
             "viser", "fpsample", "trimesh", "numba", "gradio", "safetensors", "easydict", "rembg", "onnxruntime", 
             "transformers", "accelerate", "diffusers", "scipy", "tqdm", "opencv-python", "ninja", "requests", 
-            "xatlas", "pymcubes"
+            "xatlas", "pymcubes", "google-generativeai"
         )
         .run_commands(
             "git clone --recurse-submodules https://github.com/microsoft/TRELLIS /trellis"
@@ -97,8 +97,41 @@ def generate_3d_mesh(prompt: str, style: str = "lowpoly", issue_desc: str = "", 
     import tempfile
     from PIL import Image, ImageDraw
 
-    full_prompt = f"{prompt}. {issue_desc}".strip() if issue_desc else prompt
+    # ---------------------------------------------------------
+    # Integrate Google Gemini AI to enhance prompt logic
+    # ---------------------------------------------------------
+    gemini_api_key = os.environ.get("GEMINI_API_KEY")
+    enhanced_prompt = None
+
+    if gemini_api_key:
+        try:
+            print("🧠 [Modal GPU Serverless] Reaching out to Gemini API to auto-enhance art prompt...")
+            # We install `google-genai` dynamically or it must be added to pip_install
+            import google.generativeai as genai
+            genai.configure(api_key=gemini_api_key)
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            
+            base_prompt = f"Title: {prompt}\nDescription: {issue_desc}" if issue_desc else prompt
+            ai_instruction = (
+                f"You are an expert game 3D technical artist. The user wants to generate a 3D asset described as: '{base_prompt}'. "
+                "Rewrite this into a single, highly descriptive physical prompt optimized for a 3D Mesh Generator. "
+                "Include visual materials, textures, geometry shapes, and lighting properties. Keep it under 2 sentences."
+            )
+            
+            response = model.generate_content(ai_instruction)
+            enhanced_prompt = response.text.strip()
+            print(f"✨ [Modal GPU Serverless] Gemini Enhanced Prompt: '{enhanced_prompt}'")
+        except Exception as e:
+            print(f"⚠️ Failed to call Gemini API ({e}). Falling back to raw prompt.")
+
+    # Use enhanced prompt if successful, otherwise fallback to raw combination
+    if enhanced_prompt:
+        full_prompt = enhanced_prompt
+    else:
+        full_prompt = f"{prompt}. {issue_desc}".strip() if issue_desc else prompt
+
     print(f"🚀 [Modal GPU Serverless] Loading Trellis pipeline from /trellis for prompt: '{full_prompt}'...")
+
     
     # Inject Trellis into runtime paths dynamically
     if "/trellis" not in sys.path:
