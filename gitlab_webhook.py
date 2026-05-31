@@ -22,11 +22,18 @@ async def gitlab_issue_listener(req: Request):
     
     # Check if the webhook event is "Issue Opened"
     if body.get("object_kind") == "issue" and body.get("object_attributes", {}).get("action") == "open":
-        print("Issue opened event detected. Triggering GitLab Pipeline...")
-
-        # Extract issue info to pass to the pipeline
-        issue_title = body.get("object_attributes", {}).get("title", "A 3D object")
+        # Extract issue info
+        issue_title = body.get("object_attributes", {}).get("title", "")
         issue_desc = body.get("object_attributes", {}).get("description", "")
+
+        # Only trigger pipeline if the issue title starts with "MeshGen:" (case-insensitive)
+        if not issue_title.lower().startswith("meshgen:"):
+            print(f"Ignored: Issue '{issue_title}' doesn't start with 'MeshGen:'")
+            return {"status": "ignored", "reason": "Missing MeshGen: prefix"}
+
+        # Extract the pure prompt by stripping "MeshGen:" from it
+        prompt = issue_title.split(":", 1)[1].strip()
+        print(f"Triggering 3D Pipeline for prompt: {prompt}")
 
         # 'ref' is simply the branch name you want the pipeline to run on.
         # We will use 'main'. If your default branch is 'master', change this to 'master'.
@@ -36,7 +43,7 @@ async def gitlab_issue_listener(req: Request):
         form_data = urllib.parse.urlencode({
             "token": GITLAB_TRIGGER_TOKEN,
             "ref": ref,
-            "variables[ISSUE_TITLE]": issue_title,
+            "variables[ISSUE_TITLE]": prompt,
             "variables[ISSUE_DESC]": issue_desc
         }).encode("utf-8")
 
