@@ -20,15 +20,24 @@ try:
     
     # Define production Docker runtime with cloned Trellis & Hunyuan3D-Part/P3-SAM repositories
     pipeline_image = (
-        modal.Image.debian_slim(python_version="3.10")
-        .apt_install("git", "ffmpeg", "libgl1", "libglib2.0-0")
-        .run_commands(
-            "git clone https://github.com/microsoft/TRELLIS /trellis",
-            "cd /trellis && pip install -r requirements.txt"
+        modal.Image.from_registry("nvidia/cuda:12.1.1-devel-ubuntu22.04", add_python="3.10")
+        .apt_install("git", "ffmpeg", "libgl1", "libglib2.0-0", "build-essential", "ninja-build", "clang", "cmake")
+        .env({"CXX": "clang++", "CC": "clang"})
+        # Install PyTorch and xformers together so pip resolves them correctly against the CUDA 12.1 wheels
+        .pip_install("torch==2.4.0", "torchvision", "torchaudio", "xformers", extra_options="--index-url https://download.pytorch.org/whl/cu121")
+        # Explicitly install remaining packages
+        .pip_install(
+            "imageio", "pillow", "huggingface_hub", "spconv-cu121", 
+            "viser", "fpsample", "trimesh", "numba", "gradio", "safetensors"
         )
         .run_commands(
+            "git clone --recurse-submodules https://github.com/microsoft/TRELLIS /trellis"
+        )
+        .env({"CUDA_HOME": "/usr/local/cuda", "TORCH_CUDA_ARCH_LIST": "8.6"})
+        .run_commands(
             "git clone https://github.com/Tencent-Hunyuan/Hunyuan3D-Part /hunyuan",
-            "cd /hunyuan && pip install -r requirements.txt"
+            # P3-SAM requires compiling the chamfer3D CUDA extension
+            "cd /hunyuan/P3-SAM/utils/chamfer3D && python setup.py install"
         )
     )
 
@@ -43,6 +52,7 @@ try:
     )
     
     app = modal.App(name="gitmesh-compute")
+    storage_volume = modal.Volume.from_name("gitmesh-storage", create_if_missing=True)
 except ImportError:
     # Local fallback/dry-run shim for build stability when modal library isn't globally active
     class MockApp:
@@ -53,6 +63,7 @@ except ImportError:
     app = MockApp()
     pipeline_image = None
     blender_image = None
+    storage_volume = None
 
 
 # =====================================================================
@@ -61,9 +72,10 @@ except ImportError:
 
 @app.function(
     image=pipeline_image,
-    gpu="A10g", 
+    gpu="L4", 
     timeout=600,
-    secrets=[modal.Secret.from_name("gitmesh-keys")] if modal else []
+    secrets=[modal.Secret.from_name("gitmesh-keys")] if modal else [],
+    volumes={"/mnt/data": storage_volume} if storage_volume else {}
 )
 def generate_3d_mesh(prompt: str, style: str = "lowpoly") -> Dict[str, Any]:
     """
@@ -89,8 +101,12 @@ def generate_3d_mesh(prompt: str, style: str = "lowpoly") -> Dict[str, Any]:
     if "/trellis" not in sys.path:
         sys.path.append("/trellis")
 
+    # Use Modal Volume for persistent asset storage across function calls
+    storage_dir = "/mnt/data/assets"
+    os.makedirs(storage_dir, exist_ok=True)
     temp_dir = tempfile.gettempdir()
-    glb_path = os.path.join(temp_dir, f"trellis_mesh_{style}.glb")
+    glb_filename = f"trellis_mesh_{prompt.lower().replace(' ', '_')}_{style}.glb"
+    glb_path = os.path.join(storage_dir, glb_filename)
 
     # Setup conceptual seed/colors matching user inputs
     prompt_lower = prompt.lower()
@@ -145,12 +161,12 @@ def generate_3d_mesh(prompt: str, style: str = "lowpoly") -> Dict[str, Any]:
             f.write(f"PRODUCER_TRELLIS_LOCAL_MESH_DATA for: {prompt} ({style})")
 
     file_size_bytes = os.path.getsize(glb_path)
-    mock_url = f"https://modal.com/artifacts/gitmesh-compute/local_glb_{prompt.lower().replace(' ', '_')}.glb"
+    output_url = glb_path  # Now persisting the actual persistent volume file path
 
-    print(f"✅ [Modal GPU Serverless] 3D mesh successfully compiled locally. Asset bound to: {mock_url}")
+    print(f"✅ [Modal GPU Serverless] 3D mesh successfully compiled locally. Asset bound to: {output_url}")
     return {
         "status": "success",
-        "url": mock_url,
+        "url": output_url,
         "style": style,
         "vertex_count": 14200 if style == "lowpoly" else 58000,
         "file_size_kb": round(file_size_bytes / 1024, 2),
@@ -164,9 +180,10 @@ def generate_3d_mesh(prompt: str, style: str = "lowpoly") -> Dict[str, Any]:
 
 @app.function(
     image=pipeline_image,
-    gpu="A10g",
+    gpu="L4",
     timeout=300,
-    secrets=[modal.Secret.from_name("gitmesh-keys")] if modal else []
+    secrets=[modal.Secret.from_name("gitmesh-keys")] if modal else [],
+    volumes={"/mnt/data": storage_volume} if storage_volume else {}
 )
 def segment_mesh(glb_url: str, prompt_tags: str) -> Dict[str, Any]:
     """
@@ -239,7 +256,8 @@ def segment_mesh(glb_url: str, prompt_tags: str) -> Dict[str, Any]:
 @app.function(
     image=blender_image,
     timeout=600,
-    secrets=[modal.Secret.from_name("gitmesh-keys")] if modal else []
+    secrets=[modal.Secret.from_name("gitmesh-keys")] if modal else [],
+    volumes={"/mnt/data": storage_volume} if storage_volume else {}
 )
 def animate_and_render_mesh(glb_url: str, animation_plan_json: str) -> Dict[str, Any]:
     """
@@ -329,11 +347,20 @@ print("Blender engine sequence completed gracefully.")
 """
 
     print(f"📂 Preparing workspaces in serverless execution environment...")
+    storage_dir = "/mnt/data/assets"
+    os.makedirs(storage_dir, exist_ok=True)
     temp_dir = tempfile.gettempdir()
+    
     script_path = os.path.join(temp_dir, "render_sequence.py")
-    glb_in_path = os.path.join(temp_dir, "input_mesh.glb")
-    glb_out_path = os.path.join(temp_dir, "animated_out.glb")
-    mp4_out_path = os.path.join(temp_dir, "output_renders.mp4")
+    
+    # Try fetching the local file reference if standard URL
+    base_name = os.path.basename(glb_url)
+    glb_in_path = os.path.join(storage_dir, base_name)
+    if not os.path.exists(glb_in_path):
+        glb_in_path = os.path.join(temp_dir, "input_mesh.glb")
+        
+    glb_out_path = os.path.join(storage_dir, f"animated_{base_name}")
+    mp4_out_path = os.path.join(storage_dir, f"preview_{base_name.replace('.glb','.mp4')}")
 
     # Save mock inputs
     with open(glb_in_path, "w") as f:
