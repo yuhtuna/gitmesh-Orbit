@@ -109,7 +109,7 @@ def generate_3d_mesh(prompt: str, style: str = "lowpoly", issue_desc: str = "", 
             # We install `google-genai` dynamically or it must be added to pip_install
             import google.generativeai as genai
             genai.configure(api_key=gemini_api_key)
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-3.5-flash')
             
             base_prompt = f"Title: {prompt}\nDescription: {issue_desc}" if issue_desc else prompt
             ai_instruction = (
