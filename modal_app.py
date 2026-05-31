@@ -28,7 +28,7 @@ try:
         # Explicitly install remaining packages
         .pip_install(
             "imageio", "pillow", "huggingface_hub", "spconv-cu121", 
-            "viser", "fpsample", "trimesh", "numba", "gradio", "safetensors", "easydict"
+            "viser", "fpsample", "trimesh", "numba", "gradio", "safetensors", "easydict", "rembg", "onnxruntime"
         )
         .run_commands(
             "git clone --recurse-submodules https://github.com/microsoft/TRELLIS /trellis"
