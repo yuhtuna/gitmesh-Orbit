@@ -157,7 +157,10 @@ def generate_3d_mesh(prompt: str, style: str = "lowpoly", issue_iid: str = None,
         postprocessing_utils.export_to_glb(outputs['mesh_v'], glb_path)
         print("✅ Trellis pipeline local module ran successfully on GPU.")
     except Exception as e:
-        print(f"⚠️ Trellis local GPU execution bypassed/failed ({e}). Running in model compilation fallback mode.")
+        import traceback
+        print(f"⚠️ Trellis local GPU execution bypassed/failed:")
+        traceback.print_exc()
+        print("Running in model compilation fallback mode.")
         # Make sure a valid mockup GLB exists for the rest of pipeline stages even during failures or CUDA constraints
         with open(glb_path, "w") as f:
             f.write(f"PRODUCER_TRELLIS_LOCAL_MESH_DATA for: {prompt} ({style})")
