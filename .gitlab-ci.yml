@@ -14,64 +14,32 @@ run_gitmesh_pipeline:
     - apt-get update && apt-get install -y curl
   script:
     - echo "============================================="
-    - echo " GitMesh v1.4 — 10-Stage AI Asset Pipeline"
+    - echo " GitMesh v1.4 - 10-Stage AI Asset Pipeline"
     - echo " Triggered by Issue #${ISSUE_IID}"
     - echo " Prompt: ${ISSUE_TITLE}"
     - echo "============================================="
-
-    # ── Stage 0: Setup ──────────────────────────────────────────
-    - echo "📋 Stage 0: Pipeline Setup"
-    - 'curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🚀 **GitMesh Pipeline Started!**\n- Asset: ${ISSUE_TITLE}\n- Issue: #${ISSUE_IID}\n- Stages: 10" "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"'
+    - 'curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🚀 GitMesh Pipeline Started! Asset: ${ISSUE_TITLE} (Issue #${ISSUE_IID}, 10 stages)" "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"'
     - pip install modal
-
-    # ── Stage 1: Gemini Brain ───────────────────────────────────
-    - echo "🧠 Stage 1: Gemini Brain — analyzing prompt..."
-    - 'curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🧠 **Stage 1: Gemini Brain** — Analyzing prompt and planning pipeline..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"'
-
-    # ── Stage 2: Reference Image ────────────────────────────────
-    - echo "📷 Stage 2: Generating reference image..."
-    - 'curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=📷 **Stage 2: Reference Image** — Generating via Imagen..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"'
+    - 'curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🧠 Stage 1: Gemini Brain - Analyzing prompt and planning pipeline..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"'
+    - 'curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=📷 Stage 2: Reference Image - Generating via Imagen..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"'
     - modal run modal_app.py::generate_reference_image --prompt "${ISSUE_TITLE}" --issue-desc "${ISSUE_DESC}" --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
-
-    # ── Stage 3: Trellis 3D Mesh ────────────────────────────────
-    - echo "🧊 Stage 3: Generating 3D mesh via Trellis 2..."
-    - 'curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🧊 **Stage 3: Mesh Generation** — Offloading to Modal GPU (L4)..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"'
+    - 'curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🧊 Stage 3: Mesh Generation - Offloading to Modal GPU (L4)..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"'
     - modal run modal_app.py::generate_3d_mesh --prompt "${ISSUE_TITLE}" --issue-desc "${ISSUE_DESC}" --style "lowpoly" --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
-
-    # ── Stage 4: P3-SAM Segmentation ────────────────────────────
-    - echo "✂️ Stage 4: Segmenting mesh into parts..."
-    - 'curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=✂️ **Stage 4: Segmentation** — Running P3-SAM on GPU..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"'
+    - 'curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=✂️ Stage 4: Segmentation - Running P3-SAM on GPU..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"'
     - modal run modal_app.py::segment_mesh --glb-url "placeholder" --prompt-tags "base,lid,handle,latch" --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
-
-    # ── Stage 5-6: Blender Cleanup + Render ─────────────────────
-    - echo "🔧 Stages 5-6: Blender cleanup + part rendering..."
-    - 'curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🔧 **Stages 5-6: Blender** — Cleaning edges + rendering parts..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"'
-
-    # ── Stage 7: Label Parts ────────────────────────────────────
-    - echo "🏷️ Stage 7: Labeling parts via Gemini Flash Lite..."
-    - 'curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🏷️ **Stage 7: Part Labeling** — Classifying with Gemini Flash Lite..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"'
-    - modal run modal_app.py::label_parts --parts-json '{"part_0":"base","part_1":"lid","part_2":"handle","part_3":"latch"}' --asset-name "${ISSUE_TITLE}" --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
-
-    # ── Stage 8: Animation Plan ─────────────────────────────────
-    - echo "🎬 Stage 8: Generating animation plan via Gemini Flash..."
-    - 'curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🎬 **Stage 8: Animation Planning** — Gemini Flash generating motion plan..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"'
-    - modal run modal_app.py::generate_animation_plan --labels-json '{"part_0":"base","part_1":"lid","part_2":"handle","part_3":"latch"}' --asset-name "${ISSUE_TITLE}" --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
-
-    # ── Stage 9: Validation ─────────────────────────────────────
-    - echo "✅ Stage 9: Validating animation plan..."
-    - 'curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=✅ **Stage 9: Validation** — Running geometric checks..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"'
-    - modal run modal_app.py::validate_animation_plan --plan-json '{"steps":[]}' --labels-json '{}' --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
-
-    # ── Stage 10: Blender Export ────────────────────────────────
-    - echo "🎬 Stage 10: Exporting animated GLB via Blender..."
-    - 'curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🎬 **Stage 10: Final Export** — Blender headless rendering..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"'
-    - modal run modal_app.py::animate_and_render_mesh --glb-url "placeholder" --animation-plan-json '{"rotation_y":360,"frames":24}' --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
-
-    # ── Pipeline Complete ───────────────────────────────────────
+    - 'curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🔧 Stages 5-6: Blender - Cleaning edges and rendering parts..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"'
+    - 'curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🏷️ Stage 7: Part Labeling - Classifying with Gemini Flash Lite..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"'
+    - modal run modal_app.py::label_parts --parts-json "{\"part_0\":\"base\",\"part_1\":\"lid\",\"part_2\":\"handle\",\"part_3\":\"latch\"}" --asset-name "${ISSUE_TITLE}" --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
+    - 'curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🎬 Stage 8: Animation Planning - Gemini Flash generating motion plan..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"'
+    - modal run modal_app.py::generate_animation_plan --labels-json "{\"part_0\":\"base\",\"part_1\":\"lid\",\"part_2\":\"handle\",\"part_3\":\"latch\"}" --asset-name "${ISSUE_TITLE}" --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
+    - 'curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=✅ Stage 9: Validation - Running geometric checks..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"'
+    - modal run modal_app.py::validate_animation_plan --plan-json "{\"steps\":[]}" --labels-json "{}" --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
+    - 'curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🎬 Stage 10: Final Export - Blender headless rendering..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"'
+    - modal run modal_app.py::animate_and_render_mesh --glb-url "placeholder" --animation-plan-json "{\"rotation_y\":360,\"frames\":24}" --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
     - echo "============================================="
     - echo " Pipeline Complete! Closing issue #${ISSUE_IID}"
     - echo "============================================="
-    - 'curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🏁 **Pipeline Complete!** All 10 stages finished.\n- Asset: ${ISSUE_TITLE}\n- Status: Ready for review" "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"'
+    - 'curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🏁 Pipeline Complete! All 10 stages finished. Asset: ${ISSUE_TITLE} - Status: Ready for review" "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"'
     - 'curl --request PUT --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "state_event=close" "${GITLAB_API_URL}/issues/${ISSUE_IID}"'
   only:
     - triggers
