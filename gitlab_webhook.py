@@ -25,6 +25,7 @@ async def gitlab_issue_listener(req: Request):
         # Extract issue info
         issue_title = body.get("object_attributes", {}).get("title", "")
         issue_desc = body.get("object_attributes", {}).get("description", "")
+        issue_iid = body.get("object_attributes", {}).get("iid", "")
 
         # Only trigger pipeline if the issue title starts with "MeshGen:" (case-insensitive)
         if not issue_title.lower().startswith("meshgen:"):
@@ -44,7 +45,8 @@ async def gitlab_issue_listener(req: Request):
             "token": GITLAB_TRIGGER_TOKEN,
             "ref": ref,
             "variables[ISSUE_TITLE]": prompt,
-            "variables[ISSUE_DESC]": issue_desc
+            "variables[ISSUE_DESC]": issue_desc,
+            "variables[ISSUE_IID]": issue_iid
         }).encode("utf-8")
 
         # Call out to GitLab CI API

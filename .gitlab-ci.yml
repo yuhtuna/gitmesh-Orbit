@@ -5,18 +5,46 @@ variables:
   # The issue title and description are injected dynamically by our Modal Webhook!
   ISSUE_TITLE: "Fallback Prompt"
   ISSUE_DESC: ""
+  ISSUE_IID: ""
+  GITLAB_API_URL: "https://gitlab.com/api/v4/projects/$CI_PROJECT_ID"
 
 run_gitmesh_pipeline:
   stage: generate_3d
   image: python:3.10-slim
+  before_script:
+    - apt-get update && apt-get install -y curl
   script:
-    - echo "Triggered by GitLab Issue!"
-    - echo "Issue Title => $ISSUE_TITLE"
-    - echo "Issue Description => $ISSUE_DESC"
+    - echo "Triggered by GitLab Issue #$ISSUE_IID!"
+    - echo "Prompt => $ISSUE_TITLE"
+    
+    # 1. Post a comment saying we started
+    - >
+      curl --request POST --header "PRIVATE-TOKEN: $GITLAB_API_TOKEN" 
+      --form "body=🚀 **GitMesh Pipeline Started!** Generating 3D model for: \`$ISSUE_TITLE\`" 
+      "$GITLAB_API_URL/issues/$ISSUE_IID/notes"
+
+    # Install Modal and configure
     - pip install modal
-    # Ensure you set MODAL_TOKEN_ID and MODAL_TOKEN_SECRET in your GitLab CI/CD Variables
+
+    # 2. Post a comment saying GPU is running
+    - >
+      curl --request POST --header "PRIVATE-TOKEN: $GITLAB_API_TOKEN" 
+      --form "body=⏳ Offloading generation to Modal Serverless GPU (L4)..." 
+      "$GITLAB_API_URL/issues/$ISSUE_IID/notes"
+
+    # Run actual generation
     - echo "Firing off Modal GPU tasks..."
-    # You can call your Modal functions using the modal CLI or python, e.g.:
-    # - modal run modal_app.py::generate_3d_mesh --prompt "$ISSUE_TITLE" --style "lowpoly"
+    - modal run modal_app.py::generate_3d_mesh --prompt "$ISSUE_TITLE" --style "lowpoly"
+
+    # 3. Post a comment saying it's done & close the issue
+    - >
+      curl --request POST --header "PRIVATE-TOKEN: $GITLAB_API_TOKEN" 
+      --form "body=✅ **Generation Complete!** The model was saved successfully." 
+      "$GITLAB_API_URL/issues/$ISSUE_IID/notes"
+
+    - >
+      curl --request PUT --header "PRIVATE-TOKEN: $GITLAB_API_TOKEN" 
+      --form "state_event=close" 
+      "$GITLAB_API_URL/issues/$ISSUE_IID"
   only:
     - triggers
