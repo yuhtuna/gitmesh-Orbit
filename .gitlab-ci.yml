@@ -24,7 +24,7 @@ run_gitmesh_pipeline:
     - 'curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=Offloading generation to Modal Serverless GPU L4..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"'
     # Run actual generation
     - echo "Firing off Modal GPU tasks..."
-    - modal run modal_app.py::generate_3d_mesh --prompt "${ISSUE_TITLE}" --style "lowpoly" --issue_iid "${ISSUE_IID}" --gitlab_token "${GITLAB_API_TOKEN}"
+    - modal run modal_app.py::generate_3d_mesh --prompt "${ISSUE_TITLE}" --issue-desc "${ISSUE_DESC}" --style "lowpoly" --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
     # 3. Post a comment saying it's done & close the issue
     - 'curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=Generation Complete! The model was saved successfully." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"'
     - 'curl --request PUT --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "state_event=close" "${GITLAB_API_URL}/issues/${ISSUE_IID}"'

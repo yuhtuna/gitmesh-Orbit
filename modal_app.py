@@ -79,7 +79,7 @@ except ImportError:
     secrets=[modal.Secret.from_name("gitmesh-keys")] if modal else [],
     volumes={"/mnt/data": storage_volume} if storage_volume else {}
 )
-def generate_3d_mesh(prompt: str, style: str = "lowpoly", issue_iid: str = None, gitlab_token: str = None) -> Dict[str, Any]:
+def generate_3d_mesh(prompt: str, style: str = "lowpoly", issue_desc: str = "", issue_iid: str = None, gitlab_token: str = None) -> Dict[str, Any]:
     """
     Serverless GPU function running Trellis pipeline locally in the container.
     Appends /trellis to sys.path, imports real Trellis generation, 
@@ -97,7 +97,8 @@ def generate_3d_mesh(prompt: str, style: str = "lowpoly", issue_iid: str = None,
     import tempfile
     from PIL import Image, ImageDraw
 
-    print(f"🚀 [Modal GPU Serverless] Loading Trellis pipeline from /trellis for prompt: '{prompt}'...")
+    full_prompt = f"{prompt}. {issue_desc}".strip() if issue_desc else prompt
+    print(f"🚀 [Modal GPU Serverless] Loading Trellis pipeline from /trellis for prompt: '{full_prompt}'...")
     
     # Inject Trellis into runtime paths dynamically
     if "/trellis" not in sys.path:
