@@ -94,17 +94,12 @@ try:
         # Install open3d separately — it has complex binary dependencies that can conflict
         .pip_install("open3d")
         .run_commands(
-            "git clone --recurse-submodules https://github.com/microsoft/TRELLIS /trellis"
-        )
-        .env({"CUDA_HOME": "/usr/local/cuda", "TORCH_CUDA_ARCH_LIST": "8.6"})
-        .run_commands(
+            "git clone --recurse-submodules https://github.com/microsoft/TRELLIS /trellis",
             "git clone https://github.com/Tencent-Hunyuan/Hunyuan3D-Part /hunyuan",
             # P3-SAM requires compiling the chamfer3D CUDA extension
             "cd /hunyuan/P3-SAM/utils/chamfer3D && python setup.py install"
         )
-        # Cache-bust: bump this comment to force Modal to rebuild the image layers
-        # BUILD_CACHE_KEY: v2-fix-open3d-p3sam-20260531
-        .env({"BUILD_CACHE_KEY": "v2-fix-open3d-p3sam-20260531"})
+        .env({"CUDA_HOME": "/usr/local/cuda", "TORCH_CUDA_ARCH_LIST": "8.6"})
     )
 
     # Dynamic image configuration for Headless Blender (use newer Ubuntu for Blender 4.x)
