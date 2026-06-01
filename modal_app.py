@@ -93,13 +93,14 @@ try:
         )
         # Install open3d separately — it has complex binary dependencies that can conflict
         .pip_install("open3d")
+        # Set CUDA env BEFORE cloning/building so chamfer3D compilation finds the arch flags
+        .env({"CUDA_HOME": "/usr/local/cuda", "TORCH_CUDA_ARCH_LIST": "8.6"})
         .run_commands(
             "git clone --recurse-submodules https://github.com/microsoft/TRELLIS /trellis",
             "git clone https://github.com/Tencent-Hunyuan/Hunyuan3D-Part /hunyuan",
             # P3-SAM requires compiling the chamfer3D CUDA extension
-            "cd /hunyuan/P3-SAM/utils/chamfer3D && python setup.py install"
+            "cd /hunyuan/P3-SAM/utils/chamfer3D && TORCH_CUDA_ARCH_LIST=8.6 python setup.py install"
         )
-        .env({"CUDA_HOME": "/usr/local/cuda", "TORCH_CUDA_ARCH_LIST": "8.6"})
     )
 
     # Dynamic image configuration for Headless Blender (use newer Ubuntu for Blender 4.x)
