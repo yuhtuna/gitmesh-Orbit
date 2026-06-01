@@ -89,7 +89,7 @@ try:
             "imageio", "pillow", "huggingface_hub", "spconv-cu121", 
             "viser", "fpsample", "trimesh", "numba", "gradio", "safetensors", "easydict", "rembg", "onnxruntime", 
             "transformers==4.44.2", "accelerate", "diffusers", "scipy", "tqdm", "opencv-python", "ninja", "requests", 
-            "xatlas", "pymcubes", "google-generativeai", "open3d"
+            "xatlas", "pymcubes", "google-generativeai", "open3d", "plyfile"
         )
         .run_commands(
             "git clone --recurse-submodules https://github.com/microsoft/TRELLIS /trellis"
@@ -98,7 +98,9 @@ try:
         .run_commands(
             "git clone https://github.com/Tencent-Hunyuan/Hunyuan3D-Part /hunyuan",
             # P3-SAM requires compiling the chamfer3D CUDA extension
-            "cd /hunyuan/P3-SAM/utils/chamfer3D && python setup.py install"
+            "cd /hunyuan/P3-SAM/utils/chamfer3D && python setup.py install",
+            # Install P3-SAM as a package so 'import p3_sam' works
+            "cd /hunyuan/P3-SAM && pip install -e ."
         )
     )
 
