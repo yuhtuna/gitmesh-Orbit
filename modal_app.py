@@ -93,11 +93,19 @@ try:
         )
         # Install open3d separately — it has complex binary dependencies that can conflict
         .pip_install("open3d")
+        # Install Kaolin, nvdiffrast, and flash-attn dependencies
+        .pip_install("kaolin", extra_options="-f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.4.0_cu121.html")
+        .pip_install("git+https://github.com/NVlabs/nvdiffrast.git")
+        .pip_install("flash-attn", extra_options="--no-build-isolation")
         # Set CUDA env BEFORE cloning/building so chamfer3D compilation finds the arch flags
         .env({"CUDA_HOME": "/usr/local/cuda", "TORCH_CUDA_ARCH_LIST": "8.6"})
         .run_commands(
             "git clone --recurse-submodules https://github.com/microsoft/TRELLIS /trellis",
             "git clone https://github.com/Tencent-Hunyuan/Hunyuan3D-Part /hunyuan",
+            # Compile diffoctreerast (submodule of TRELLIS)
+            "cd /trellis/submodules/diffoctreerast && TORCH_CUDA_ARCH_LIST=8.6 python setup.py install",
+            # Compile flexicubes (submodule of TRELLIS)
+            "cd /trellis/trellis/representations/mesh/flexicubes && TORCH_CUDA_ARCH_LIST=8.6 python setup.py install",
             # P3-SAM requires compiling the chamfer3D CUDA extension
             "cd /hunyuan/P3-SAM/utils/chamfer3D && TORCH_CUDA_ARCH_LIST=8.6 python setup.py install"
         )
@@ -196,7 +204,7 @@ def generate_3d_mesh(prompt: str, style: str = "lowpoly", issue_desc: str = "", 
     
     # Inject Trellis into runtime paths dynamically
     if "/trellis" not in sys.path:
-        sys.path.append("/trellis")
+        sys.path.insert(0, "/trellis")
 
     # Use Modal Volume for persistent asset storage across function calls
     storage_dir = "/mnt/data/assets"
@@ -498,9 +506,10 @@ def segment_mesh(glb_url: str, prompt_tags: str, issue_iid: str = None, gitlab_t
 
     print("🚀 [Modal GPU Serverless] Loading P3-SAM system from /hunyuan/P3-SAM...")
     
-    # Inject P3-SAM workspace paths dynamically
-    if "/hunyuan/P3-SAM" not in sys.path:
-        sys.path.append("/hunyuan/P3-SAM")
+    # Inject P3-SAM and XPart workspace paths dynamically
+    for path in ["/hunyuan/P3-SAM", "/hunyuan/XPart/partgen", "/hunyuan/xpart/partgen"]:
+        if path not in sys.path:
+            sys.path.insert(0, path)
 
     tags = [tag.strip() for tag in prompt_tags.split(",")]
     segmented_parts = {}
@@ -508,9 +517,6 @@ def segment_mesh(glb_url: str, prompt_tags: str, issue_iid: str = None, gitlab_t
     try:
         # P3-SAM is not a standard package; model.py lives directly in /hunyuan/P3-SAM/
         # The demo imports it via: from model import build_P3SAM, load_state_dict
-        # We also need XPart in the path for the sonata dependency
-        if "/hunyuan/XPart/partgen" not in sys.path:
-            sys.path.append("/hunyuan/XPart/partgen")
         
         from model import build_P3SAM, load_state_dict
         import torch.nn as nn

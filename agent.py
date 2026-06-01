@@ -124,9 +124,9 @@ def run_generate_3d_mesh(prompt: str, style: str = "lowpoly") -> Dict[str, Any]:
     # If Modal client and function is properly imported, run container sandbox invocation
     if modal_generate_3d_mesh is not None:
         try:
-            # Use local/remote Modal invoker handles if available
-            if hasattr(modal_generate_3d_mesh, "local"):
-                return modal_generate_3d_mesh.local(prompt, style)
+            # Use remote Modal container runtime handles
+            if hasattr(modal_generate_3d_mesh, "remote"):
+                return modal_generate_3d_mesh.remote(prompt, style)
             return modal_generate_3d_mesh(prompt, style)
         except Exception as e:
             logger.warning(f"⚠️ Modal execution failed during run_generate_3d_mesh ({e}). Proceeding in local mode.")
@@ -160,8 +160,8 @@ def run_segment_mesh(glb_url: str, prompt_tags: str) -> Dict[str, Any]:
     # If Modal client and function is properly imported, run container sandbox invocation
     if modal_segment_mesh is not None:
         try:
-            if hasattr(modal_segment_mesh, "local"):
-                return modal_segment_mesh.local(glb_url, prompt_tags)
+            if hasattr(modal_segment_mesh, "remote"):
+                return modal_segment_mesh.remote(glb_url, prompt_tags)
             return modal_segment_mesh(glb_url, prompt_tags)
         except Exception as e:
             logger.warning(f"⚠️ Modal execution failed during run_segment_mesh ({e}). Proceeding in local mode.")
@@ -194,8 +194,8 @@ def run_animate_and_render_mesh(glb_url: str, animation_plan_json: str) -> Dict[
     # Invoke live Modal container worker if available
     if modal_animate_and_render_mesh is not None:
         try:
-            if hasattr(modal_animate_and_render_mesh, "local"):
-                return modal_animate_and_render_mesh.local(glb_url, animation_plan_json)
+            if hasattr(modal_animate_and_render_mesh, "remote"):
+                return modal_animate_and_render_mesh.remote(glb_url, animation_plan_json)
             return modal_animate_and_render_mesh(glb_url, animation_plan_json)
         except Exception as e:
             logger.warning(f"⚠️ Modal execution failed during run_animate_and_render_mesh ({e}). Proceeding in local mode.")
