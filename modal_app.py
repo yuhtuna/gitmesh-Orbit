@@ -89,8 +89,10 @@ try:
             "imageio", "pillow", "huggingface_hub", "spconv-cu121", 
             "viser", "fpsample", "trimesh", "numba", "gradio", "safetensors", "easydict", "rembg", "onnxruntime", 
             "transformers==4.44.2", "accelerate", "diffusers", "scipy", "tqdm", "opencv-python", "ninja", "requests", 
-            "xatlas", "pymcubes", "google-generativeai", "open3d", "plyfile"
+            "xatlas", "pymcubes", "google-generativeai", "plyfile"
         )
+        # Install open3d separately — it has complex binary dependencies that can conflict
+        .pip_install("open3d")
         .run_commands(
             "git clone --recurse-submodules https://github.com/microsoft/TRELLIS /trellis"
         )
@@ -98,10 +100,11 @@ try:
         .run_commands(
             "git clone https://github.com/Tencent-Hunyuan/Hunyuan3D-Part /hunyuan",
             # P3-SAM requires compiling the chamfer3D CUDA extension
-            "cd /hunyuan/P3-SAM/utils/chamfer3D && python setup.py install",
-            # Install P3-SAM as a package so 'import p3_sam' works
-            "cd /hunyuan/P3-SAM && pip install -e ."
+            "cd /hunyuan/P3-SAM/utils/chamfer3D && python setup.py install"
         )
+        # Cache-bust: bump this comment to force Modal to rebuild the image layers
+        # BUILD_CACHE_KEY: v2-fix-open3d-p3sam-20260531
+        .env({"BUILD_CACHE_KEY": "v2-fix-open3d-p3sam-20260531"})
     )
 
     # Dynamic image configuration for Headless Blender (use newer Ubuntu for Blender 4.x)
@@ -507,19 +510,31 @@ def segment_mesh(glb_url: str, prompt_tags: str, issue_iid: str = None, gitlab_t
     segmented_parts = {}
 
     try:
-        # Import target models from cloned P3-SAM workspace pipeline
-        from p3_sam import PartSegmenter3D, load_mesh_file
+        # P3-SAM is not a standard package; model.py lives directly in /hunyuan/P3-SAM/
+        # The demo imports it via: from model import build_P3SAM, load_state_dict
+        # We also need XPart in the path for the sonata dependency
+        if "/hunyuan/XPart/partgen" not in sys.path:
+            sys.path.append("/hunyuan/XPart/partgen")
         
-        print("🔬 [Modal GPU Serverless] Initializing P3-SAM PartSegmenter3D neural modules on GPU...")
-        segmenter = PartSegmenter3D.from_pretrained("Hunyuan3D/P3-SAM")
+        from model import build_P3SAM, load_state_dict
+        import torch.nn as nn
+        
+        print("🔬 [Modal GPU Serverless] Initializing P3-SAM neural modules on GPU...")
+        
+        class P3SAM(nn.Module):
+            def __init__(self):
+                super().__init__()
+                build_P3SAM(self)
+            
+            def load_weights(self, ckpt_path=None, state_dict=None, **kwargs):
+                load_state_dict(self, ckpt_path=ckpt_path, state_dict=state_dict, **kwargs)
+        
+        segmenter = P3SAM()
         segmenter.cuda()
+        segmenter.load_weights()  # downloads from HuggingFace
+        segmenter.eval()
         
-        print(f"✂️ [Modal GPU Serverless] Executing local P3-SAM segmentation for tags: '{prompt_tags}'...")
-        # Run inference using the loaded model
-        # loaded_mesh = load_mesh_file(glb_url)
-        # sam_parts = segmenter.segment(loaded_mesh, labels=tags)
-        # Map output elements dynamically to ensure no runtime crashes
-        print("✅ P3-SAM model local module imported and compiled successfully.")
+        print("✅ P3-SAM model loaded and compiled successfully on GPU.")
     except Exception as e:
         print(f"⚠️ P3-SAM local GPU execution bypassed/failed ({e}). Running in model compilation fallback mode.")
 
