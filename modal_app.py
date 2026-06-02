@@ -95,7 +95,7 @@ try:
         .pip_install("open3d")
         # Install Kaolin, nvdiffrast, and flash-attn dependencies
         .pip_install("kaolin", extra_options="-f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.4.0_cu121.html")
-        .pip_install("git+https://github.com/NVlabs/nvdiffrast.git")
+        .pip_install("git+https://github.com/NVlabs/nvdiffrast.git", extra_options="--no-build-isolation")
         .pip_install("flash-attn", extra_options="--no-build-isolation")
         # Set CUDA env BEFORE cloning/building so chamfer3D compilation finds the arch flags
         .env({"CUDA_HOME": "/usr/local/cuda", "TORCH_CUDA_ARCH_LIST": "8.6"})
