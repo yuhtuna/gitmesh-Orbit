@@ -21,6 +21,8 @@ Run on Modal Cloud:
 
 import os
 import sys
+# Set default attention backend for TRELLIS to xformers to bypass compiling flash-attn
+os.environ["ATTN_BACKEND"] = "xformers"
 import json
 import math
 import tempfile
@@ -80,36 +82,40 @@ try:
     # Define production Docker runtime with cloned Trellis & Hunyuan3D-Part/P3-SAM repositories
     pipeline_image = (
         modal.Image.from_registry("nvidia/cuda:12.1.1-devel-ubuntu22.04", add_python="3.10")
+        # Set environment variables FIRST so they are active during all subsequent build and installation steps
+        .env({
+            "CUDA_HOME": "/usr/local/cuda",
+            "TORCH_CUDA_ARCH_LIST": "8.6;8.9;9.0",
+            "PATH": "/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "ATTN_BACKEND": "xformers",
+            "CXX": "clang++",
+            "CC": "clang"
+        })
         .apt_install("git", "ffmpeg", "libgl1", "libglib2.0-0", "build-essential", "ninja-build", "clang", "cmake")
-        .env({"CXX": "clang++", "CC": "clang"})
         # Install PyTorch and xformers together so pip resolves them correctly against the CUDA 12.1 wheels
         .pip_install("torch==2.4.0", "torchvision", "torchaudio", "xformers", extra_options="--index-url https://download.pytorch.org/whl/cu121")
-        # Pin transformers to a version compatible with PyTorch 2.4.0 (newer versions require torch.distributed.tensor.device_mesh from PT 2.5+)
+        # Ensure wheel and setuptools are present before building compiled packages
+        .pip_install("setuptools", "wheel", "ninja")
+        # nvdiffrast needs CUDA variables and wheel present to build successfully without isolation
+        .pip_install("git+https://github.com/NVlabs/nvdiffrast.git", extra_options="--no-build-isolation")
+        # Install Kaolin using prebuilt wheels matching our PyTorch and CUDA versions
+        .pip_install("kaolin", extra_options="-f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.4.0_cu121.html")
+        # Pin transformers to a version compatible with PyTorch 2.4.0
         .pip_install(
             "imageio", "pillow", "huggingface_hub", "spconv-cu121", 
             "viser", "fpsample", "trimesh", "numba", "gradio", "safetensors", "easydict", "rembg", "onnxruntime", 
-            "transformers==4.44.2", "accelerate", "diffusers", "scipy", "tqdm", "opencv-python", "ninja", "requests", 
+            "transformers==4.44.2", "accelerate", "diffusers", "scipy", "tqdm", "opencv-python", "requests", 
             "xatlas", "pymcubes", "google-generativeai", "plyfile"
         )
         # Install open3d separately — it has complex binary dependencies that can conflict
         .pip_install("open3d")
-        # Install Kaolin, nvdiffrast, and flash-attn dependencies
-        .pip_install("kaolin", extra_options="-f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.4.0_cu121.html")
-        # nvdiffrast needs wheel+setuptools present (--no-build-isolation skips isolated env)
-        .pip_install("setuptools", "wheel")
-        .pip_install("git+https://github.com/NVlabs/nvdiffrast.git", extra_options="--no-build-isolation")
-        .pip_install("flash-attn", extra_options="--no-build-isolation")
-        # Set CUDA env BEFORE cloning/building so chamfer3D compilation finds the arch flags
-        .env({"CUDA_HOME": "/usr/local/cuda", "TORCH_CUDA_ARCH_LIST": "8.6"})
         .run_commands(
             "git clone --recurse-submodules https://github.com/microsoft/TRELLIS /trellis",
             "git clone https://github.com/Tencent-Hunyuan/Hunyuan3D-Part /hunyuan",
             # Compile diffoctreerast (submodule of TRELLIS)
-            "cd /trellis/submodules/diffoctreerast && TORCH_CUDA_ARCH_LIST=8.6 python setup.py install",
-            # Compile flexicubes (submodule of TRELLIS)
-            "cd /trellis/trellis/representations/mesh/flexicubes && TORCH_CUDA_ARCH_LIST=8.6 python setup.py install",
-            # P3-SAM requires compiling the chamfer3D CUDA extension
-            "cd /hunyuan/P3-SAM/utils/chamfer3D && TORCH_CUDA_ARCH_LIST=8.6 python setup.py install"
+            "cd /trellis/submodules/diffoctreerast && python setup.py install",
+            # Compile chamfer3D (submodule of P3-SAM / Hunyuan3D-Part)
+            "cd /hunyuan/P3-SAM/utils/chamfer3D && python setup.py install"
         )
     )
 
@@ -166,7 +172,6 @@ def generate_3d_mesh(prompt: str, style: str = "lowpoly", issue_desc: str = "", 
     import os
     import sys
     import tempfile
-    from PIL import Image, ImageDraw
 
     # ---------------------------------------------------------
     # Integrate Google Gemini AI to enhance prompt logic
@@ -207,6 +212,10 @@ def generate_3d_mesh(prompt: str, style: str = "lowpoly", issue_desc: str = "", 
     # Inject Trellis into runtime paths dynamically
     if "/trellis" not in sys.path:
         sys.path.insert(0, "/trellis")
+    
+    # Force attention backend to xformers to avoid importing flash-attn
+    import os
+    os.environ["ATTN_BACKEND"] = "xformers"
 
     # Use Modal Volume for persistent asset storage across function calls
     storage_dir = "/mnt/data/assets"
@@ -226,6 +235,7 @@ def generate_3d_mesh(prompt: str, style: str = "lowpoly", issue_desc: str = "", 
         color = (255, 215, 0)   # Gold
 
     try:
+        from PIL import Image, ImageDraw
         # Create a concept reference image via PIL
         img = Image.new("RGB", (1024, 1024), color=(30, 30, 30))
         draw = ImageDraw.Draw(img)
@@ -1236,11 +1246,22 @@ def _write_minimal_glb(filepath: str):
 # Optional entry point context to run and test local simulation
 if __name__ == "__main__":
     print("💎 Running local modal worker simulation routines:")
-    mesh = generate_3d_mesh("Viking Broadsword", "lowpoly")
+    
+    # Use .local() when decorated by modal to invoke functions locally
+    if hasattr(generate_3d_mesh, "local"):
+        mesh = generate_3d_mesh.local("Viking Broadsword", "lowpoly")
+    else:
+        mesh = generate_3d_mesh("Viking Broadsword", "lowpoly")
     print("Mesh generation output:", mesh)
     
-    seg = segment_mesh(mesh["url"], "hilt, blade, pommel")
+    if hasattr(segment_mesh, "local"):
+        seg = segment_mesh.local(mesh["url"], "hilt, blade, pommel")
+    else:
+        seg = segment_mesh(mesh["url"], "hilt, blade, pommel")
     print("Mesh segmentation output:", seg)
 
-    anim = animate_and_render_mesh(mesh["url"], '{"rotation_y": 360, "frames": 30}')
+    if hasattr(animate_and_render_mesh, "local"):
+        anim = animate_and_render_mesh.local(mesh["url"], '{"rotation_y": 360, "frames": 30}')
+    else:
+        anim = animate_and_render_mesh(mesh["url"], '{"rotation_y": 360, "frames": 30}')
     print("Blender Animation output:", anim)
