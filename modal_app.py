@@ -112,8 +112,9 @@ try:
         .run_commands(
             "git clone --recurse-submodules https://github.com/microsoft/TRELLIS /trellis",
             "git clone https://github.com/Tencent-Hunyuan/Hunyuan3D-Part /hunyuan",
-            # Compile diffoctreerast (submodule of TRELLIS)
-            "cd /trellis/submodules/diffoctreerast && python setup.py install",
+            # Clone and compile diffoctreerast (external dependency of TRELLIS)
+            "git clone https://github.com/JeffreyXiang/diffoctreerast /diffoctreerast",
+            "cd /diffoctreerast && python setup.py install",
             # Compile chamfer3D (submodule of P3-SAM / Hunyuan3D-Part)
             "cd /hunyuan/P3-SAM/utils/chamfer3D && python setup.py install"
         )
