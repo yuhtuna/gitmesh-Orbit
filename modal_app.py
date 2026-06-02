@@ -85,7 +85,8 @@ try:
         # Set environment variables FIRST so they are active during all subsequent build and installation steps
         .env({
             "CUDA_HOME": "/usr/local/cuda",
-            "TORCH_CUDA_ARCH_LIST": "8.6;8.9;9.0",
+            "TORCH_CUDA_ARCH_LIST": "8.9", # Target only Ada Lovelace (L4 GPU) to reduce compilation overhead/time by 3x
+            "MAX_JOBS": "1",               # Restrict parallel compilation jobs to 1 to avoid builder memory exhaustion (OOM)
             "PATH": "/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             "ATTN_BACKEND": "xformers",
             "CXX": "g++",
