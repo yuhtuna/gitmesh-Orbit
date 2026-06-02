@@ -94,8 +94,8 @@ try:
         .apt_install("git", "ffmpeg", "libgl1", "libglib2.0-0", "build-essential", "ninja-build", "cmake")
         # Install PyTorch and xformers together so pip resolves them correctly against the CUDA 12.1 wheels
         .pip_install("torch==2.4.0", "torchvision", "torchaudio", "xformers", extra_options="--index-url https://download.pytorch.org/whl/cu121")
-        # Ensure wheel and setuptools are present before building compiled packages
-        .pip_install("setuptools", "wheel", "ninja")
+        # Ensure wheel, setuptools, ninja, and pybind11 are present before building compiled packages
+        .pip_install("setuptools", "wheel", "ninja", "pybind11")
         # nvdiffrast needs CUDA variables and wheel present to build successfully without isolation
         .pip_install("git+https://github.com/NVlabs/nvdiffrast.git", extra_options="--no-build-isolation")
         # Install Kaolin using prebuilt wheels matching our PyTorch and CUDA versions
@@ -114,9 +114,9 @@ try:
             "git clone https://github.com/Tencent-Hunyuan/Hunyuan3D-Part /hunyuan",
             # Clone and compile diffoctreerast (external dependency of TRELLIS)
             "git clone https://github.com/JeffreyXiang/diffoctreerast /diffoctreerast",
-            "cd /diffoctreerast && python setup.py install",
+            "python -m pip install --no-build-isolation /diffoctreerast",
             # Compile chamfer3D (submodule of P3-SAM / Hunyuan3D-Part)
-            "cd /hunyuan/P3-SAM/utils/chamfer3D && python setup.py install"
+            "python -m pip install --no-build-isolation /hunyuan/P3-SAM/utils/chamfer3D"
         )
     )
 
