@@ -87,7 +87,9 @@ try:
             "CUDA_HOME": "/usr/local/cuda",
             "TORCH_CUDA_ARCH_LIST": "8.6;8.9;9.0",
             "PATH": "/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            "ATTN_BACKEND": "xformers"
+            "ATTN_BACKEND": "xformers",
+            "CXX": "g++",
+            "CC": "gcc"
         })
         .apt_install("git", "ffmpeg", "libgl1", "libglib2.0-0", "build-essential", "ninja-build", "cmake")
         # Install PyTorch and xformers together so pip resolves them correctly against the CUDA 12.1 wheels
