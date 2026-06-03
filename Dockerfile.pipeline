@@ -76,6 +76,10 @@ RUN echo "=== Checking glm submodule ===" && \
 # ---------- Compile diffoctreerast ----------
 RUN python -m pip install --no-build-isolation /diffoctreerast
 
+# ---------- Compile diff-gaussian-rasterization ----------
+RUN git clone --recurse-submodules https://github.com/autonomousvision/mip-splatting /mip-splatting && \
+    python -m pip install --no-build-isolation /mip-splatting/submodules/diff-gaussian-rasterization
+
 # ---------- Compile chamfer3D ----------
 RUN python -m pip install --no-build-isolation /hunyuan/P3-SAM/utils/chamfer3D
 
@@ -84,5 +88,6 @@ RUN python -m pip install --no-cache-dir https://github.com/Dao-AILab/flash-atte
 
 # ---------- Smoke test ----------
 RUN python -c "import diffoctreerast; print('✅ diffoctreerast imported successfully')"
+RUN python -c "import diff_gaussian_rasterization; print('✅ diff_gaussian_rasterization imported successfully')"
 
 CMD ["python", "-c", "print('GitMesh pipeline image ready')"]

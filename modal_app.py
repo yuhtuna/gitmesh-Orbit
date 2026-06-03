@@ -136,6 +136,9 @@ try:
             # Clone and compile diffoctreerast (external dependency of TRELLIS)
             "git clone --recurse-submodules https://github.com/JeffreyXiang/diffoctreerast /diffoctreerast",
             "python -m pip install --no-build-isolation /diffoctreerast",
+            # Clone and compile diff-gaussian-rasterization (external dependency of TRELLIS)
+            "git clone --recurse-submodules https://github.com/autonomousvision/mip-splatting /mip-splatting",
+            "python -m pip install --no-build-isolation /mip-splatting/submodules/diff-gaussian-rasterization",
             # Compile chamfer3D (submodule of P3-SAM / Hunyuan3D-Part)
             "python -m pip install --no-build-isolation /hunyuan/P3-SAM/utils/chamfer3D",
             # Install any remaining deps declared by each repo
@@ -472,9 +475,7 @@ def validate_glb(glb_path: str, issue_iid: str = None, gitlab_token: str = None)
         import trimesh
         mesh = trimesh.load(glb_path)
         if isinstance(mesh, trimesh.Scene):
-            geom = list(mesh.geometry.values())
-            if geom:
-                mesh = geom[0]
+            mesh = mesh.to_mesh()
         if hasattr(mesh, 'vertices') and hasattr(mesh, 'faces'):
             stats["trimesh_vertices"] = len(mesh.vertices)
             stats["trimesh_faces"] = len(mesh.faces)
@@ -1042,6 +1043,28 @@ def animate_and_render_mesh(glb_url: str, animation_plan_json: str, issue_iid: s
             header = f.read(4)
             is_valid_glb = (header == b'glTF')
 
+    # If it is not a valid GLB, generate a valid procedural chest mesh fallback
+    # and save it to a temporary file, redirecting glb_in_path to it.
+    if not is_valid_glb:
+        print("⚠️ Input GLB is not valid. Generating procedural chest fallback mesh...")
+        try:
+            fallback_glb_path = os.path.join(temp_dir, "procedural_fallback_input.glb")
+            fallback_mesh = _create_procedural_chest_mesh()
+            fallback_mesh.export(fallback_glb_path)
+            glb_in_path = fallback_glb_path
+            is_valid_glb = True
+            print(f"✅ Generated procedural chest fallback mesh and saved to {glb_in_path}")
+        except Exception as e:
+            print(f"⚠️ Failed to create procedural chest mesh: {e}. Writing minimal unit cube GLB...")
+            try:
+                fallback_glb_path = os.path.join(temp_dir, "minimal_fallback_input.glb")
+                _write_minimal_glb(fallback_glb_path)
+                glb_in_path = fallback_glb_path
+                is_valid_glb = True
+                print(f"✅ Written minimal fallback GLB to {glb_in_path}")
+            except Exception as e2:
+                print(f"❌ Failed to write minimal fallback GLB: {e2}")
+
     # ---- Try trimesh-based procedural animation first (more reliable than Blender) ----
     animation_success = False
     try:
@@ -1050,6 +1073,8 @@ def animate_and_render_mesh(glb_url: str, animation_plan_json: str, issue_iid: s
 
         if is_valid_glb:
             mesh = trimesh.load(glb_in_path)
+            if isinstance(mesh, trimesh.Scene):
+                mesh = mesh.to_mesh()
             print(f"✅ Loaded valid GLB: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
         else:
             # Create a procedural treasure chest mesh as fallback
