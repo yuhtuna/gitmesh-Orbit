@@ -6,6 +6,8 @@ variables:
   ISSUE_DESC: ""
   ISSUE_IID: ""
   GITLAB_API_URL: "https://gitlab.com/api/v4/projects/$CI_PROJECT_ID"
+  MODAL_LOGLEVEL: "DEBUG"
+  GRPC_VERBOSITY: "DEBUG"
 
 run_gitmesh_pipeline:
   stage: generate_3d
