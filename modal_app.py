@@ -128,6 +128,8 @@ try:
         # Install torch-scatter and torch-cluster from PyG prebuilt wheels
         .pip_install("torch-scatter", "torch-cluster",
                      extra_options="-f https://data.pyg.org/whl/torch-2.4.0+cu121.html")
+        # Install prebuilt flash-attention wheel to bypass long compilation times and OOM failures
+        .pip_install("https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3%2Bcu12torch2.4cxx11abiFALSE-cp310-cp310-linux_x86_64.whl")
         .run_commands(
             "git clone --recurse-submodules https://github.com/microsoft/TRELLIS /trellis",
             "git clone https://github.com/Tencent-Hunyuan/Hunyuan3D-Part /hunyuan",
@@ -291,7 +293,13 @@ def generate_3d_mesh(prompt: str, style: str = "lowpoly", issue_desc: str = "", 
 
         # Extract mesh models and dump to file
         print("🧱 [Modal GPU Serverless] Extracting high-fidelity vertices and exporting to GLB format...")
-        postprocessing_utils.export_to_glb(outputs['mesh_v'], glb_path)
+        glb = postprocessing_utils.to_glb(
+            outputs['gaussian'][0],
+            outputs['mesh'][0],
+            simplify=0.95,
+            texture_size=1024
+        )
+        glb.export(glb_path)
         print("✅ Trellis pipeline local module ran successfully on GPU.")
     except Exception as e:
         import traceback

@@ -79,6 +79,9 @@ RUN python -m pip install --no-build-isolation /diffoctreerast
 # ---------- Compile chamfer3D ----------
 RUN python -m pip install --no-build-isolation /hunyuan/P3-SAM/utils/chamfer3D
 
+# ---------- Install flash-attention prebuilt wheel ----------
+RUN python -m pip install --no-cache-dir https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3%2Bcu12torch2.4cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+
 # ---------- Smoke test ----------
 RUN python -c "import diffoctreerast; print('✅ diffoctreerast imported successfully')"
 
