@@ -108,7 +108,7 @@ try:
             "imageio", "pillow", "huggingface_hub", "spconv-cu121", 
             "viser", "fpsample", "trimesh", "numba", "gradio", "safetensors", "easydict", "rembg", "onnxruntime", 
             "transformers==4.44.2", "accelerate", "diffusers", "scipy", "tqdm", "opencv-python", "requests", 
-            "xatlas", "pymcubes", "google-generativeai", "plyfile", "utils3d"
+            "xatlas", "pymcubes", "google-generativeai", "plyfile", "utils3d", "pyvista", "timm"
         )
         # Install torch-scatter from PyG prebuilt wheels for PyTorch 2.4.0 + cu121
         .pip_install("torch-scatter", extra_options="-f https://data.pyg.org/whl/torch-2.4.0+cu121.html")
