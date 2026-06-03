@@ -103,17 +103,31 @@ try:
         .run_commands("rm -rf /usr/lib/python3/dist-packages/blinker*")
         # Install Kaolin using prebuilt wheels matching our PyTorch and CUDA versions
         .pip_install("kaolin", extra_options="-f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.4.0_cu121.html")
-        # Pin transformers to a version compatible with PyTorch 2.4.0
+        # ── TRELLIS basic deps (from setup.sh --basic) ──
+        # ── Hunyuan3D-Part / XPart deps (from XPart/requirements.txt) ──
+        # ── Our own pipeline deps ──
+        # All merged into one comprehensive install to avoid one-by-one discovery
         .pip_install(
-            "imageio", "pillow", "huggingface_hub", "spconv-cu121", 
-            "viser", "fpsample", "trimesh", "numba", "gradio", "safetensors", "easydict", "rembg", "onnxruntime", 
-            "transformers==4.44.2", "accelerate", "diffusers", "scipy", "tqdm", "opencv-python", "requests", 
-            "xatlas", "pymcubes", "google-generativeai", "plyfile", "utils3d", "pyvista", "timm"
+            # TRELLIS setup.sh --basic
+            "pillow", "imageio", "imageio-ffmpeg", "tqdm", "easydict",
+            "opencv-python-headless", "scipy", "ninja", "rembg", "onnxruntime",
+            "trimesh", "open3d", "xatlas", "pyvista", "pymeshfix", "igraph",
+            "transformers==4.44.2",
+            # TRELLIS uses a pinned utils3d commit
+            "git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8",
+            # Hunyuan3D-Part / XPart requirements
+            "addict", "scikit-learn", "fpsample", "pymeshlab==2023.12.post3",
+            # P3-SAM / Sonata runtime deps
+            "timm", "omegaconf",
+            # Our pipeline deps
+            "huggingface_hub", "spconv-cu121",
+            "viser", "numba", "gradio", "safetensors",
+            "accelerate", "diffusers", "opencv-python", "requests",
+            "pymcubes", "google-generativeai", "plyfile",
         )
-        # Install torch-scatter from PyG prebuilt wheels for PyTorch 2.4.0 + cu121
-        .pip_install("torch-scatter", extra_options="-f https://data.pyg.org/whl/torch-2.4.0+cu121.html")
-        # Install open3d separately — it has complex binary dependencies that can conflict
-        .pip_install("open3d")
+        # Install torch-scatter and torch-cluster from PyG prebuilt wheels
+        .pip_install("torch-scatter", "torch-cluster",
+                     extra_options="-f https://data.pyg.org/whl/torch-2.4.0+cu121.html")
         .run_commands(
             "git clone --recurse-submodules https://github.com/microsoft/TRELLIS /trellis",
             "git clone https://github.com/Tencent-Hunyuan/Hunyuan3D-Part /hunyuan",
@@ -121,7 +135,9 @@ try:
             "git clone --recurse-submodules https://github.com/JeffreyXiang/diffoctreerast /diffoctreerast",
             "python -m pip install --no-build-isolation /diffoctreerast",
             # Compile chamfer3D (submodule of P3-SAM / Hunyuan3D-Part)
-            "python -m pip install --no-build-isolation /hunyuan/P3-SAM/utils/chamfer3D"
+            "python -m pip install --no-build-isolation /hunyuan/P3-SAM/utils/chamfer3D",
+            # Install any remaining deps declared by each repo
+            "python -m pip install --no-cache-dir -r /hunyuan/XPart/requirements.txt || true",
         )
     )
 
