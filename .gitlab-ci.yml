@@ -11,7 +11,9 @@ run_gitmesh_pipeline:
   stage: generate_3d
   image: python:3.10-slim
   before_script:
-    - apt-get update && apt-get install -y curl
+    - apt-get update && apt-get install -y curl dnsutils
+    - nslookup api.modal.com || true
+    - curl -Iv https://api.modal.com || true
   script: |
     set -e
     echo "============================================="
