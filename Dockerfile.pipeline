@@ -1,0 +1,85 @@
+# =============================================================================
+# Dockerfile.pipeline — Local replica of Modal pipeline_image for testing
+# Mirrors modal_app.py lines 83-122 exactly
+# 
+# Build:  docker build -f Dockerfile.pipeline -t gitmesh-pipeline .
+# Test:   docker run --gpus all gitmesh-pipeline python -c "import diffoctreerast; print('OK')"
+# =============================================================================
+
+FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
+
+# ---------- Environment variables (matches .env() in modal_app.py) ----------
+ENV CUDA_HOME=/usr/local/cuda \
+    TORCH_CUDA_ARCH_LIST="8.9" \
+    MAX_JOBS="1" \
+    PATH="/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+    ATTN_BACKEND="xformers" \
+    CXX="g++" \
+    CC="gcc" \
+    DEBIAN_FRONTEND=noninteractive
+
+# ---------- System packages (matches .apt_install()) ----------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git ffmpeg libgl1 libglib2.0-0 build-essential ninja-build cmake \
+    software-properties-common curl \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 python3.10-venv python3.10-dev python3.10-distutils \
+    && update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1 \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 1 \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.10 \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---------- PyTorch + xformers (matches first .pip_install()) ----------
+RUN python -m pip install --no-cache-dir \
+    torch==2.4.0 torchvision torchaudio xformers \
+    --index-url https://download.pytorch.org/whl/cu121
+
+# ---------- Build tools (matches second .pip_install()) ----------
+RUN python -m pip install --no-cache-dir setuptools wheel ninja pybind11
+
+# ---------- nvdiffrast (matches .pip_install("git+...nvdiffrast")) ----------
+RUN python -m pip install --no-cache-dir --no-build-isolation \
+    git+https://github.com/NVlabs/nvdiffrast.git
+
+# ---------- Kaolin prebuilt wheels ----------
+# Manually remove distutils-installed blinker from base image (pip can't uninstall it)
+RUN rm -rf /usr/lib/python3/dist-packages/blinker* && \
+    python -m pip install --no-cache-dir kaolin \
+    -f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.4.0_cu121.html
+
+# ---------- Python dependencies ----------
+RUN python -m pip install --no-cache-dir \
+    imageio pillow huggingface_hub spconv-cu121 \
+    viser fpsample trimesh numba gradio safetensors easydict rembg onnxruntime \
+    transformers==4.44.2 accelerate diffusers scipy tqdm opencv-python requests \
+    xatlas pymcubes google-generativeai plyfile
+
+# ---------- open3d (separate to avoid conflicts) ----------
+RUN python -m pip install --no-cache-dir open3d
+
+# ---------- Clone repositories ----------
+RUN git clone --recurse-submodules https://github.com/microsoft/TRELLIS /trellis
+RUN git clone https://github.com/Tencent-Hunyuan/Hunyuan3D-Part /hunyuan
+
+# ---------- KEY FIX: Clone diffoctreerast WITH submodules (glm) ----------
+RUN git clone --recurse-submodules https://github.com/JeffreyXiang/diffoctreerast /diffoctreerast
+
+# Verify glm submodule was populated before attempting compilation
+RUN echo "=== Checking glm submodule ===" && \
+    ls -la /diffoctreerast/lib/glm/ && \
+    ls -la /diffoctreerast/lib/glm/glm/ && \
+    echo "=== glm/glm.hpp exists ===" && \
+    test -f /diffoctreerast/lib/glm/glm/glm.hpp && \
+    echo "VERIFIED: glm headers are present"
+
+# ---------- Compile diffoctreerast ----------
+RUN python -m pip install --no-build-isolation /diffoctreerast
+
+# ---------- Compile chamfer3D ----------
+RUN python -m pip install --no-build-isolation /hunyuan/P3-SAM/utils/chamfer3D
+
+# ---------- Smoke test ----------
+RUN python -c "import diffoctreerast; print('✅ diffoctreerast imported successfully')"
+
+CMD ["python", "-c", "print('GitMesh pipeline image ready')"]

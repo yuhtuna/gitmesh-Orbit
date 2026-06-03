@@ -99,6 +99,8 @@ try:
         .pip_install("setuptools", "wheel", "ninja", "pybind11")
         # nvdiffrast needs CUDA variables and wheel present to build successfully without isolation
         .pip_install("git+https://github.com/NVlabs/nvdiffrast.git", extra_options="--no-build-isolation")
+        # Force-remove distutils-installed blinker from base image (pip can't uninstall it) to avoid conflicts
+        .run_commands("rm -rf /usr/lib/python3/dist-packages/blinker*")
         # Install Kaolin using prebuilt wheels matching our PyTorch and CUDA versions
         .pip_install("kaolin", extra_options="-f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.4.0_cu121.html")
         # Pin transformers to a version compatible with PyTorch 2.4.0
@@ -114,7 +116,7 @@ try:
             "git clone --recurse-submodules https://github.com/microsoft/TRELLIS /trellis",
             "git clone https://github.com/Tencent-Hunyuan/Hunyuan3D-Part /hunyuan",
             # Clone and compile diffoctreerast (external dependency of TRELLIS)
-            "git clone https://github.com/JeffreyXiang/diffoctreerast /diffoctreerast",
+            "git clone --recurse-submodules https://github.com/JeffreyXiang/diffoctreerast /diffoctreerast",
             "python -m pip install --no-build-isolation /diffoctreerast",
             # Compile chamfer3D (submodule of P3-SAM / Hunyuan3D-Part)
             "python -m pip install --no-build-isolation /hunyuan/P3-SAM/utils/chamfer3D"
