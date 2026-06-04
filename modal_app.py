@@ -1328,6 +1328,18 @@ def animate_and_render_mesh(glb_url: str, animation_plan_json: str, issue_iid: s
         except Exception:
             plan = {"rotation_y": 360, "frames": 24}
 
+    # Load labels mapping from storage to rename parts in Blender
+    labels = {}
+    labels_path = "/mnt/data/assets/v3-labeled/labels.json"
+    if os.path.exists(labels_path):
+        try:
+            with open(labels_path, "r") as f:
+                labels = json.load(f)
+                print(f"🔄 Loaded labels mapping from {labels_path}")
+        except Exception as e:
+            print(f"⚠️ Failed to load labels mapping from {labels_path}: {e}")
+    serialized_labels = json.dumps(labels)
+
     # Calculate total frames in the outer script to avoid NameError
     from collections import defaultdict
     order_groups = defaultdict(list)
@@ -1473,6 +1485,20 @@ for obj in original_mesh_objs:
         bpy.data.objects.remove(obj, do_unlink=True)
     except Exception:
         pass
+
+# 4.5. Rename part objects to their semantic labels using labels mapping
+labels_str = """{serialized_labels}"""
+labels = json.loads(labels_str)
+for part_key, semantic_label in labels.items():
+    obj = bpy.data.objects.get(part_key)
+    if not obj:
+        for o in bpy.data.objects:
+            if part_key in o.name:
+                obj = o
+                break
+    if obj:
+        obj.name = semantic_label
+        print(f"Renamed {{part_key}} to {{semantic_label}}")
 
 # Load plan
 plan_str = """{serialized_plan}"""
