@@ -1362,6 +1362,17 @@ def animate_and_render_mesh(glb_url: str, animation_plan_json: str, issue_iid: s
             else:
                 glb_in_path = os.path.join(temp_dir, "input_mesh.glb")
 
+    # Determine the original textured GLB path to restore materials
+    orig_glb_path = ""
+    base_name = os.path.basename(glb_url) if glb_url and glb_url != "placeholder" else "trellis_mesh.glb"
+    orig_candidate = os.path.join(storage_dir, base_name)
+    if os.path.exists(orig_candidate):
+        orig_glb_path = orig_candidate.replace("\\", "/")
+    else:
+        glb_candidates = [f for f in os.listdir(storage_dir) if f.endswith('.glb') and not f.startswith('segmented_')]
+        if glb_candidates:
+            orig_glb_path = os.path.join(storage_dir, glb_candidates[0]).replace("\\", "/")
+
     base_name = os.path.basename(glb_in_path)
     glb_out_path = os.path.join(storage_dir, f"animated_{base_name}")
     mp4_out_path = os.path.join(storage_dir, f"preview_{base_name.replace('.glb','.mp4')}")
@@ -1413,16 +1424,55 @@ bpy.ops.object.camera_add(location=(0, -6, 2.5), rotation=(1.25, 0, 0))
 bpy.context.scene.camera = bpy.context.object
 bpy.ops.object.light_add(type='SUN', location=(1, -2, 6))
 
+orig_path = "{orig_glb_path}"
 input_path = "{glb_in_path}"
+
+# 1. Import original textured mesh to harvest materials
+original_mesh_objs = set()
+if os.path.exists(orig_path):
+    try:
+        bpy.ops.import_scene.gltf(filepath=orig_path)
+        print("Original textured mesh imported successfully.")
+        for obj in bpy.data.objects:
+            if obj.type == 'MESH' and not obj.name.startswith("part_"):
+                original_mesh_objs.add(obj)
+    except Exception as e:
+        print(f"Original GLB import error: {{e}}")
+
+# 2. Import segmented mesh (the geometry we actually animate)
 if os.path.exists(input_path):
     try:
         bpy.ops.import_scene.gltf(filepath=input_path)
-        print("Mesh imported successfully.")
+        print("Segmented mesh imported successfully.")
     except Exception as e:
-        print(f"GLB import error: {{e}}", file=sys.stderr)
+        print(f"Segmented GLB import error: {{e}}", file=sys.stderr)
         bpy.ops.mesh.primitive_cube_add(size=2, location=(0, 0, 0))
 else:
     bpy.ops.mesh.primitive_cube_add(size=2, location=(0, 0, 0))
+
+# 3. Apply original materials to segmented parts
+original_materials = []
+for obj in original_mesh_objs:
+    for slot in obj.material_slots:
+        if slot.material and slot.material not in original_materials:
+            original_materials.append(slot.material)
+
+if not original_materials:
+    original_materials = list(bpy.data.materials)
+
+for obj in bpy.data.objects:
+    if obj.name.startswith("part_") or "part" in obj.name.lower():
+        obj.data.materials.clear()
+        for mat in original_materials:
+            obj.data.materials.append(mat)
+        print(f"Restored {{len(original_materials)}} materials to {{obj.name}}")
+
+# 4. Clean up original mesh objects so they don't render or export in final output
+for obj in original_mesh_objs:
+    try:
+        bpy.data.objects.remove(obj, do_unlink=True)
+    except Exception:
+        pass
 
 # Load plan
 plan_str = """{serialized_plan}"""
