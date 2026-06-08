@@ -3021,6 +3021,55 @@ def list_hunyuan_files(google_access_token: str = None):
         print("File not found")
 
 
+@app.function(
+    image=pipeline_image,
+    gpu="L4",
+    timeout=1200,
+    secrets=[modal.Secret.from_name("gitmesh-keys")] if modal else [],
+    volumes={"/mnt/data": storage_volume} if storage_volume else {}
+)
+def run_full_pipeline(prompt: str, issue_desc: str = "", issue_iid: str = None, gitlab_token: str = None):
+    """Orchestrates the entire 10-stage technical art asset generation pipeline in a single container.
+    This bypasses Modal's AppCreate rate limits and significantly improves execution speed by keeping
+    the models loaded and caching files locally.
+    """
+    print(f"🏁 [GitMesh Pipeline Orchestrator] Starting 10-stage remote pipeline for: '{prompt}' (Issue #{issue_iid or 'N/A'})")
+    
+    # 1. Reference Image
+    print("📷 [Stage 2] Running generate_reference_image...")
+    generate_reference_image.local(prompt, issue_desc=issue_desc, issue_iid=issue_iid, gitlab_token=gitlab_token)
+    
+    # 2. 3D Mesh
+    print("🧊 [Stage 3] Running generate_3d_mesh...")
+    generate_3d_mesh.local(prompt, style="lowpoly", issue_desc=issue_desc, issue_iid=issue_iid, gitlab_token=gitlab_token)
+    
+    # 3. Validate GLB
+    print("🔍 [Stage 3b] Running validate_glb...")
+    validate_glb.local(issue_iid=issue_iid, gitlab_token=gitlab_token)
+    
+    # 4. Segment Mesh
+    print("✂️ [Stage 4] Running segment_mesh...")
+    segment_mesh.local(issue_iid=issue_iid, gitlab_token=gitlab_token)
+    
+    # 5. Label parts
+    print("🏷️ [Stage 7] Running label_parts...")
+    label_parts.local(asset_name=prompt, issue_iid=issue_iid, gitlab_token=gitlab_token)
+    
+    # 6. Animation plan
+    print("🎬 [Stage 8] Running generate_animation_plan...")
+    generate_animation_plan.local(asset_name=prompt, issue_iid=issue_iid, gitlab_token=gitlab_token)
+    
+    # 7. Validate animation plan
+    print("✅ [Stage 9] Running validate_animation_plan...")
+    validate_animation_plan.local(issue_iid=issue_iid, gitlab_token=gitlab_token)
+    
+    # 8. Animate and render
+    print("🎬 [Stage 10] Running animate_and_render_mesh...")
+    animate_and_render_mesh.local(issue_iid=issue_iid, gitlab_token=gitlab_token)
+    
+    print("🏁 [GitMesh Pipeline Orchestrator] Completed 10-stage remote pipeline successfully!")
+
+
 # Optional entry point context to run and test local simulation
 if __name__ == "__main__":
     print("💎 Running local modal worker simulation routines:")

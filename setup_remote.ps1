@@ -198,7 +198,7 @@ function Upsert-GitLabWebhook {
     $body = @{
         url = $HookUrl
         token = $SecretToken
-        issue_events = $true
+        issues_events = $true
         push_events = $false
         merge_requests_events = $false
         tag_push_events = $false
@@ -306,18 +306,24 @@ if ([string]::IsNullOrWhiteSpace($resolvedWebhookUrl) -and $config.ContainsKey("
 
 if (-not $SkipSecret) {
     Write-Host "[*] Creating Modal secret gitmesh-keys..." -ForegroundColor Cyan
-    # Keep reruns idempotent by replacing an existing secret before create.
-    & $modalPath secret delete gitmesh-keys --yes *> $null
-    & $modalPath secret create gitmesh-keys `
-        "GCP_PROJECT_ID=$($config["GCP_PROJECT_ID"])" `
-        "GCP_SERVICE_ACCOUNT_JSON=$($config["GCP_SERVICE_ACCOUNT_JSON"])" `
-        "GITLAB_PROJECT_ID=$($config["GITLAB_PROJECT_ID"])" `
-        "GITLAB_URL=$($config["GITLAB_URL"])" `
-        "GITLAB_TRIGGER_TOKEN=$($config["GITLAB_TRIGGER_TOKEN"])" `
-        "GITLAB_WEBHOOK_SECRET=$($config["GITLAB_WEBHOOK_SECRET"])" `
-        "GITLAB_TRIGGER_REF=$($config["GITLAB_TRIGGER_REF"])" `
-        "LLM_PROVIDER=$($config["LLM_PROVIDER"])" `
-        "IMAGE_MODEL=$($config["IMAGE_MODEL"])"
+    
+    $secretData = @{
+        GCP_PROJECT_ID = $config["GCP_PROJECT_ID"]
+        GCP_SERVICE_ACCOUNT_JSON = $config["GCP_SERVICE_ACCOUNT_JSON"]
+        GITLAB_PROJECT_ID = $config["GITLAB_PROJECT_ID"]
+        GITLAB_URL = $config["GITLAB_URL"]
+        GITLAB_TRIGGER_TOKEN = $config["GITLAB_TRIGGER_TOKEN"]
+        GITLAB_WEBHOOK_SECRET = $config["GITLAB_WEBHOOK_SECRET"]
+        GITLAB_TRIGGER_REF = $config["GITLAB_TRIGGER_REF"]
+        LLM_PROVIDER = $config["LLM_PROVIDER"]
+        IMAGE_MODEL = $config["IMAGE_MODEL"]
+    }
+    $tempJsonPath = Join-Path $env:TEMP "gitmesh_secrets_temp.json"
+    $jsonString = $secretData | ConvertTo-Json -Depth 100
+    [System.IO.File]::WriteAllText($tempJsonPath, $jsonString)
+    
+    & $modalPath secret create gitmesh-keys --from-json $tempJsonPath --force
+    Remove-Item $tempJsonPath -ErrorAction SilentlyContinue
 }
 
 if (-not $SkipDeploy) {
