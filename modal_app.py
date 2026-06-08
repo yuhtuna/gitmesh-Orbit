@@ -504,7 +504,7 @@ def _generate_imagen_gemini_api(prompt: str, gemini_api_key: Optional[str] = Non
     secrets=[modal.Secret.from_name("gitmesh-keys")] if modal else [],
     volumes={"/mnt/data": storage_volume} if storage_volume else {}
 )
-def generate_3d_mesh(prompt: str, style: str = "lowpoly", issue_desc: str = "", issue_iid: str = None, gitlab_token: str = None) -> Dict[str, Any]:
+def generate_3d_mesh(prompt: str, style: str = "lowpoly", issue_desc: str = "", issue_iid: str = None, gitlab_token: str = None, google_access_token: str = None) -> Dict[str, Any]:
     """
     Serverless GPU function running Trellis pipeline locally in the container.
     Appends /trellis to sys.path, imports real Trellis generation, 
@@ -518,6 +518,8 @@ def generate_3d_mesh(prompt: str, style: str = "lowpoly", issue_desc: str = "", 
         Dict[str, Any]: Metadata containing output URL, vertex counts, and file size.
     """
     import os
+    if google_access_token:
+        os.environ["GOOGLE_ACCESS_TOKEN"] = google_access_token
     import sys
     import tempfile
 
@@ -892,6 +894,8 @@ def segment_mesh(glb_url: str = "", prompt_tags: str = "", issue_iid: str = None
     and performs axis-aligned plane cuts to segment the mesh.
     """
     import os
+    if google_access_token:
+        os.environ["GOOGLE_ACCESS_TOKEN"] = google_access_token
     import sys
     import json
     import traceback
@@ -1343,7 +1347,7 @@ def segment_mesh(glb_url: str = "", prompt_tags: str = "", issue_iid: str = None
     secrets=[modal.Secret.from_name("gitmesh-keys")] if modal else [],
     volumes={"/mnt/data": storage_volume} if storage_volume else {}
 )
-def generate_reference_image(prompt: str, issue_desc: str = "", issue_iid: str = None, gitlab_token: str = None) -> Dict[str, Any]:
+def generate_reference_image(prompt: str, issue_desc: str = "", issue_iid: str = None, gitlab_token: str = None, google_access_token: str = None) -> Dict[str, Any]:
     """
     Stage 2: Generate a reference image from text prompt.
     Uses Gemini-enhanced prompt; falls back to procedural generation if Imagen unavailable.
