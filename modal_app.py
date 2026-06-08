@@ -520,6 +520,7 @@ def generate_3d_mesh(prompt: str, style: str = "lowpoly", issue_desc: str = "", 
     import os
     if google_access_token:
         os.environ["GOOGLE_ACCESS_TOKEN"] = google_access_token
+        os.environ["GCP_ACCESS_TOKEN"] = google_access_token
     import sys
     import tempfile
 
@@ -894,7 +895,7 @@ def validate_glb(glb_path: str = "", issue_iid: str = None, gitlab_token: str = 
     secrets=[modal.Secret.from_name("gitmesh-keys")] if modal else [],
     volumes={"/mnt/data": storage_volume} if storage_volume else {}
 )
-def segment_mesh(glb_url: str = "", prompt_tags: str = "", issue_iid: str = None, gitlab_token: str = None) -> Dict[str, Any]:
+def segment_mesh(glb_url: str = "", prompt_tags: str = "", issue_iid: str = None, gitlab_token: str = None, google_access_token: str = None) -> Dict[str, Any]:
     """
     Serverless GPU function running Gemini-Guided Slicing Partitioner.
     Calculates 3D mesh bounds, queries Gemini for the slicing plan,
@@ -903,6 +904,7 @@ def segment_mesh(glb_url: str = "", prompt_tags: str = "", issue_iid: str = None
     import os
     if google_access_token:
         os.environ["GOOGLE_ACCESS_TOKEN"] = google_access_token
+        os.environ["GCP_ACCESS_TOKEN"] = google_access_token
     import sys
     import json
     import traceback
@@ -1365,6 +1367,9 @@ def generate_reference_image(prompt: str, issue_desc: str = "", issue_iid: str =
         Dict with 'reference_path' (local file) and 'upload_url' (GitLab).
     """
     import os
+    if google_access_token:
+        os.environ["GOOGLE_ACCESS_TOKEN"] = google_access_token
+        os.environ["GCP_ACCESS_TOKEN"] = google_access_token
     from PIL import Image, ImageDraw
 
     _ensure_l4_gpu_runtime("Stage 2: generate_reference_image")
