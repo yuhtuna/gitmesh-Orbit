@@ -772,6 +772,34 @@ def segment_mesh(glb_url: str, prompt_tags: str, issue_iid: str = None, gitlab_t
             print(f"⚠️ Failed to create procedural fallback: {e}")
 
     if mesh_exists and is_valid_glb:
+        # --- P3-SAM BLOCK (Commented out as requested, keeping previous Gemini logic active) ---
+        # try:
+        #     # P3-SAM is not a standard package; model.py lives directly in /hunyuan/P3-SAM/
+        #     # The demo imports it via: from model import build_P3SAM, load_state_dict
+        #     
+        #     from model import build_P3SAM, load_state_dict
+        #     import torch.nn as nn
+        #     
+        #     print("🔬 [Modal GPU Serverless] Initializing P3-SAM neural modules on GPU...")
+        #     
+        #     class P3SAM(nn.Module):
+        #         def __init__(self):
+        #             super().__init__()
+        #             build_P3SAM(self)
+        #             
+        #         def load_weights(self, ckpt_path=None, state_dict=None, **kwargs):
+        #             load_state_dict(self, ckpt_path=ckpt_path, state_dict=state_dict, **kwargs)
+        #             
+        #     segmenter = P3SAM()
+        #     segmenter.cuda()
+        #     segmenter.load_weights()  # downloads from HuggingFace
+        #     segmenter.eval()
+        #     
+        #     print("✅ P3-SAM model loaded and compiled successfully on GPU.")
+        # except Exception as e:
+        #     print(f"⚠️ P3-SAM local GPU execution bypassed/failed ({e}). Running in model compilation fallback mode.")
+        # ----------------------------------------------------------------------------------------
+
         try:
             import trimesh
             import numpy as np
