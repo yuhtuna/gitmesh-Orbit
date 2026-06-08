@@ -6,12 +6,16 @@ variables:
   ISSUE_DESC: ""
   ISSUE_IID: ""
   GITLAB_API_URL: "https://gitlab.com/api/v4/projects/$CI_PROJECT_ID"
+  MODAL_LOGLEVEL: "DEBUG"
+  GRPC_VERBOSITY: "DEBUG"
 
 run_gitmesh_pipeline:
   stage: generate_3d
   image: python:3.10-slim
   before_script:
-    - apt-get update && apt-get install -y curl
+    - apt-get update && apt-get install -y curl dnsutils
+    - nslookup api.modal.com || true
+    - curl -Iv https://api.modal.com || true
   script: |
     set -e
     echo "============================================="
