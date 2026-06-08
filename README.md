@@ -108,28 +108,52 @@ gcloud services enable aiplatform.googleapis.com
 
 2. Create a narrowly scoped service account for Vertex calls and grant it Vertex AI access. Store its JSON key securely.
 
-3. Create the Modal secret used by every GPU function:
+3. Fill `.env` from `.env.example` with real values:
 
-```bash
-modal secret create gitmesh-keys \
-    GCP_PROJECT_ID="YOUR_GCP_PROJECT_ID" \
-    GCP_SERVICE_ACCOUNT_JSON='{"type":"service_account",...}' \
-    LLM_PROVIDER="vertex" \
-    IMAGE_MODEL="imagen-4.0-fast-generate-001"
+```text
+GCP_PROJECT_ID=...
+GCP_SERVICE_ACCOUNT_JSON={...}
+GITLAB_PROJECT_ID=...
+GITLAB_API_TOKEN=...             # token with API access to project vars/hooks/issues
+GITLAB_TRIGGER_TOKEN=...
+GITLAB_WEBHOOK_SECRET=...
+MODAL_TOKEN_ID=...
+MODAL_TOKEN_SECRET=...
+AUTO_CLOSE_ISSUE=true            # default: close issue at pipeline completion
 ```
 
-`GCP_PROJECT_ID` is required. GitMesh no longer uses any hardcoded fallback project ID.
+Optional values:
 
-For short local testing only, `GCP_ACCESS_TOKEN` can be used instead of `GCP_SERVICE_ACCOUNT_JSON`, but access tokens expire and are not ideal for unattended GitLab pipelines.
+```text
+GITLAB_URL=https://gitlab.com    # set this for self-managed GitLab
+WEBHOOK_URL=                     # override webhook URL if deploy output parsing fails
+GITLAB_TRIGGER_REF=main
+LLM_PROVIDER=vertex
+IMAGE_MODEL=imagen-4.0-fast-generate-001
+```
 
-4. Add these GitLab CI/CD variables:
+4. Run the one-command bootstrap:
 
-```bash
-MODAL_TOKEN_ID="your-modal-token-id"
-MODAL_TOKEN_SECRET="your-modal-token-secret"
-GITLAB_API_TOKEN="project-or-bot-token-with-issue-comment-access"
-GITLAB_TRIGGER_TOKEN="your-gitlab-pipeline-trigger-token"
-GITLAB_WEBHOOK_SECRET="your-webhook-secret"
+```powershell
+pwsh ./setup_remote.ps1
+```
+
+What `setup_remote.ps1` does automatically (rerun-safe GitLab API flow):
+- Validates required `.env` keys.
+- Replaces and recreates Modal secret `gitmesh-keys` with runtime values used by `modal_app.py` and `gitlab_webhook.py`.
+- Deploys `gitlab_webhook.py` and `modal_app.py`.
+- Upserts GitLab CI/CD variables (`MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET`, `GITLAB_API_TOKEN`, `GITLAB_TRIGGER_TOKEN`, `GITLAB_WEBHOOK_SECRET`, `GITLAB_TRIGGER_REF`) with sensitive values masked and unprotected by default.
+- Creates or updates the GitLab project webhook for Issue events with your webhook secret.
+- Leaves issue auto-close enabled by default; set `AUTO_CLOSE_ISSUE=false` in GitLab CI/CD variables to keep issues open after completion.
+
+Useful flags:
+
+```powershell
+pwsh ./setup_remote.ps1 -SkipDeploy
+pwsh ./setup_remote.ps1 -SkipGitLabApi
+pwsh ./setup_remote.ps1 -DryRun
+pwsh ./setup_remote.ps1 -ProtectSensitiveVars
+pwsh ./setup_remote.ps1 -WebhookUrl https://<your-webhook-url>
 ```
 
 Do not set `GEMINI_API_KEY` in GitLab production. The CI preflight enforces `LLM_PROVIDER=vertex` and fails early if a Gemini API key is present.

@@ -6,6 +6,7 @@ from fastapi import HTTPException, Request
 app = modal.App("gitmesh-webhook")
 
 GITLAB_PROJECT_ID = os.environ.get("GITLAB_PROJECT_ID", "")
+GITLAB_URL = os.environ.get("GITLAB_URL", "https://gitlab.com").rstrip("/")
 GITLAB_TRIGGER_TOKEN = os.environ.get("GITLAB_TRIGGER_TOKEN", "")
 GITLAB_TRIGGER_REF = os.environ.get("GITLAB_TRIGGER_REF", "main")
 GITLAB_WEBHOOK_SECRET = os.environ.get("GITLAB_WEBHOOK_SECRET", "")
@@ -53,7 +54,7 @@ async def gitlab_issue_listener(req: Request):
 
         ref = GITLAB_TRIGGER_REF
 
-        url = f"https://gitlab.com/api/v4/projects/{GITLAB_PROJECT_ID}/trigger/pipeline"
+        url = f"{GITLAB_URL}/api/v4/projects/{GITLAB_PROJECT_ID}/trigger/pipeline"
         form_data = urllib.parse.urlencode({
             "token": GITLAB_TRIGGER_TOKEN,
             "ref": ref,

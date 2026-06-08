@@ -132,16 +132,28 @@ def _get_vertex_credentials() -> Optional[Any]:
 # ---------------------------------------------------------------------------
 # Shared GitLab helper — posts progress comments on the triggering issue
 # ---------------------------------------------------------------------------
-GITLAB_PROJECT_ID = os.environ.get("GITLAB_PROJECT_ID", "82717291")
+GITLAB_PROJECT_ID = os.environ.get("GITLAB_PROJECT_ID", "").strip()
+GITLAB_URL = os.environ.get("GITLAB_URL", "https://gitlab.com").strip().rstrip("/")
+
+
+def _get_gitlab_project_id() -> Optional[str]:
+    project_id = GITLAB_PROJECT_ID.strip()
+    if not project_id:
+        print("[GitLab] GITLAB_PROJECT_ID is not set; skipping GitLab API integration.")
+        return None
+    return project_id
 
 def _post_gitlab_comment(issue_iid: str, gitlab_token: str, body: str) -> bool:
     """Post a markdown comment on a GitLab issue. Returns True on success."""
     if not issue_iid or not gitlab_token:
         print("[GitLab] Skipping comment — missing issue_iid or gitlab_token")
         return False
+    project_id = _get_gitlab_project_id()
+    if not project_id:
+        return False
     try:
         import requests
-        url = f"https://gitlab.com/api/v4/projects/{GITLAB_PROJECT_ID}/issues/{issue_iid}/notes"
+        url = f"{GITLAB_URL}/api/v4/projects/{project_id}/issues/{issue_iid}/notes"
         r = requests.post(url, headers={"PRIVATE-TOKEN": gitlab_token}, data={"body": body})
         ok = r.ok
         print(f"[GitLab] Comment posted ({r.status_code}): {body[:80]}...")
@@ -155,9 +167,12 @@ def _upload_to_gitlab(file_path: str, issue_iid: str, gitlab_token: str) -> Opti
     """Upload a file to GitLab and return its public URL, or None on failure."""
     if not issue_iid or not gitlab_token:
         return None
+    project_id = _get_gitlab_project_id()
+    if not project_id:
+        return None
     try:
         import requests
-        url = f"https://gitlab.com/api/v4/projects/{GITLAB_PROJECT_ID}/uploads"
+        url = f"{GITLAB_URL}/api/v4/projects/{project_id}/uploads"
         headers = {"PRIVATE-TOKEN": gitlab_token}
         with open(file_path, "rb") as fh:
             files = {"file": (os.path.basename(file_path), fh)}
@@ -168,7 +183,7 @@ def _upload_to_gitlab(file_path: str, issue_iid: str, gitlab_token: str) -> Opti
             # Use full_path for a working absolute URL
             full_path = data.get("full_path", data.get("url", ""))
             if full_path.startswith("/"):
-                return f"https://gitlab.com{full_path}"
+                return f"{GITLAB_URL}{full_path}"
             return full_path
         print(f"[GitLab] Upload failed ({r.status_code}): {r.text}")
     except Exception as e:
