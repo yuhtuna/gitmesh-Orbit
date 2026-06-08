@@ -398,7 +398,7 @@ def _predict_slicing_plan_with_gemini(asset_name: str, bounds_info: str = "", ge
         fallback = {"archetype": "SPIN", "confidence": 0.78, "should_animate": True, "reason": "keyword matched spinning object", "spin_axis": [0, 0, 1], "y_split_ratio": 0.6}
 
     try:
-        raw = _call_gemini_vertex(instruction, "gemini-2.5-flash-lite")
+        raw = _call_gemini_vertex(instruction, "gemini-3.5-flash")
         if raw:
             return json.loads(_clean_json_markdown(raw))
     except Exception as e:
@@ -724,13 +724,20 @@ def validate_glb(glb_path: str = "", issue_iid: str = None, gitlab_token: str = 
         except Exception as e:
             print(f"Warning reading seg metadata: {e}")
 
-    if not os.path.isabs(glb_path):
+    # Resolve relative paths or default empty paths to storage_dir
+    if not glb_path:
+        glb_path = storage_dir
+    elif not os.path.isabs(glb_path):
         glb_path = os.path.join(storage_dir, glb_path)
-    if not os.path.exists(glb_path):
-        # Try to find any GLB
+
+    # If the path points to a directory or does not exist, search for the latest GLB in the storage directory
+    if os.path.isdir(glb_path) or not os.path.exists(glb_path):
         candidates = [f for f in os.listdir(storage_dir) if f.endswith('.glb')] if os.path.exists(storage_dir) else []
         if candidates:
-            glb_path = os.path.join(storage_dir, candidates[0])
+            # Sort candidates by modified time (mtime) in reverse order to get the latest generated one
+            candidates_paths = [os.path.join(storage_dir, c) for c in candidates]
+            candidates_paths.sort(key=os.path.getmtime, reverse=True)
+            glb_path = candidates_paths[0]
         else:
             errors.append("GLB file not found")
             _post_gitlab_comment(issue_iid, gitlab_token,
@@ -914,6 +921,8 @@ def segment_mesh(glb_url: str = "", prompt_tags: str = "", issue_iid: str = None
     if base_name == "trellis_mesh.glb" or not os.path.exists(os.path.join(storage_dir, base_name)):
         candidates = [f for f in os.listdir(storage_dir) if f.endswith('.glb') and f.startswith('trellis_mesh_')]
         if candidates:
+            # Sort candidates by modified time to get the latest generated one
+            candidates.sort(key=lambda x: os.path.getmtime(os.path.join(storage_dir, x)), reverse=True)
             base_name = candidates[0]
     
     glb_in_path = os.path.join(storage_dir, base_name)
@@ -1564,7 +1573,7 @@ def label_parts(parts_json: str = "{}", asset_name: str = "", issue_iid: str = N
     raw = None
     try:
         print(f"🏷️ [LLM:{llm_provider}] Attempting classification via Vertex AI...")
-        raw = _call_gemini_vertex(instruction, "gemini-2.5-flash-lite")
+        raw = _call_gemini_vertex(instruction, "gemini-3.5-flash")
         print(f"DEBUG raw response: {repr(raw)}")
         if raw:
             raw = _clean_json_markdown(raw)
