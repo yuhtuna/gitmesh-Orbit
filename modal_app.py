@@ -34,6 +34,101 @@ import tempfile
 import traceback
 from typing import Dict, Any, Optional
 
+GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "").strip()
+VERTEX_LOCATION = os.environ.get("VERTEX_LOCATION", "global")
+EXPECTED_CUDA_CAPABILITY = (8, 9)  # L4 (Ada Lovelace)
+
+
+def _require_gcp_project_id() -> str:
+    if not GCP_PROJECT_ID:
+        raise RuntimeError(
+            "GCP_PROJECT_ID is required for Vertex AI calls. "
+            "Set GCP_PROJECT_ID in Modal secret 'gitmesh-keys' (remote) or local .env."
+        )
+    return GCP_PROJECT_ID
+
+
+def _ensure_l4_gpu_runtime(stage_name: str) -> None:
+    """
+    Fail fast if runtime GPU is not L4-class capability.
+    This container is intentionally compiled/pinned for L4 to avoid binary mismatch issues.
+    """
+    try:
+        import torch
+    except Exception as e:
+        raise RuntimeError(f"[{stage_name}] Unable to import torch for GPU validation: {e}")
+
+    if not torch.cuda.is_available():
+        raise RuntimeError(f"[{stage_name}] CUDA GPU is not available. This stage requires L4 GPU runtime.")
+
+    actual_capability = torch.cuda.get_device_capability(0)
+    if actual_capability != EXPECTED_CUDA_CAPABILITY:
+        gpu_name = torch.cuda.get_device_name(0)
+        raise RuntimeError(
+            f"[{stage_name}] Unsupported GPU '{gpu_name}' with compute capability {actual_capability}. "
+            f"This image is pinned to L4 compatibility {EXPECTED_CUDA_CAPABILITY}; "
+            "using a different GPU class can break native dependencies."
+        )
+
+
+def _get_llm_provider() -> str:
+    provider = os.environ.get("LLM_PROVIDER", "vertex").strip().lower()
+    if provider not in {"vertex", "gemini", "auto"}:
+        print(f"⚠️ Invalid LLM_PROVIDER '{provider}', defaulting to 'vertex'.")
+        return "vertex"
+    return provider
+
+
+def _vertex_allowed() -> bool:
+    return _get_llm_provider() in {"vertex", "auto"}
+
+
+def _gemini_api_allowed() -> bool:
+    return _get_llm_provider() in {"gemini", "auto"}
+
+
+def _get_image_model_candidates() -> list[str]:
+    """
+    Returns preferred image generation model IDs from newest/cost-effective to legacy fallback.
+    Override first choice with IMAGE_MODEL env var.
+    """
+    preferred = os.environ.get("IMAGE_MODEL", "imagen-4.0-fast-generate-001").strip()
+    candidates = [
+        preferred,
+        "imagen-4.0-generate-001",
+        "imagen-3.0-generate-002",
+        "imagen-3.0-generate-001",
+    ]
+
+    seen = set()
+    deduped = []
+    for m in candidates:
+        if m and m not in seen:
+            deduped.append(m)
+            seen.add(m)
+    return deduped
+
+
+def _get_vertex_credentials() -> Optional[Any]:
+    """Return explicit Vertex credentials for Modal runtime, or None for local ADC."""
+    service_account_json = os.environ.get("GCP_SERVICE_ACCOUNT_JSON") or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+    if service_account_json:
+        from google.oauth2 import service_account
+
+        service_account_info = json.loads(service_account_json)
+        return service_account.Credentials.from_service_account_info(
+            service_account_info,
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
+
+    gcp_token = os.environ.get("GCP_ACCESS_TOKEN") or os.environ.get("GCLOUD_TOKEN")
+    if gcp_token:
+        import google.oauth2.credentials
+
+        return google.oauth2.credentials.Credentials(token=gcp_token)
+
+    return None
+
 # ---------------------------------------------------------------------------
 # Shared GitLab helper — posts progress comments on the triggering issue
 # ---------------------------------------------------------------------------
@@ -178,39 +273,55 @@ except ImportError:
 
 
 def _call_gemini_vertex(prompt: str, model_name: str) -> Optional[str]:
-    """Helper function to call Vertex AI API using Application Default Credentials or a GCP access token.
+    """Helper function to call Vertex AI API using explicit Modal credentials or local ADC.
     
     Uses location='global' which is required for Gemini models on Vertex AI.
-    Supports GCP_ACCESS_TOKEN env var to authenticate inside Modal containers
-    where gcloud ADC is not available on disk.
+    Supports GCP_SERVICE_ACCOUNT_JSON for unattended Modal containers and
+    GCP_ACCESS_TOKEN for short-lived local/CI testing.
     """
+    if not _vertex_allowed():
+        return None
+
     try:
         import vertexai
         from vertexai.generative_models import GenerativeModel
         
-        # If a short-lived GCP access token is provided via env (e.g. from Modal secret),
-        # use it directly so we don't need gcloud ADC on disk inside the container.
-        gcp_token = os.environ.get("GCP_ACCESS_TOKEN") or os.environ.get("GCLOUD_TOKEN")
-        if gcp_token:
-            import google.oauth2.credentials
-            import google.auth.transport.requests
-            credentials = google.oauth2.credentials.Credentials(token=gcp_token)
+        credentials = _get_vertex_credentials()
+        if credentials:
             vertexai.init(
-                project="gen-lang-client-0614032633",
-                location="global",
+                project=_require_gcp_project_id(),
+                location=VERTEX_LOCATION,
                 credentials=credentials
             )
         else:
             # Fall back to Application Default Credentials (works locally with `gcloud auth login`)
-            vertexai.init(project="gen-lang-client-0614032633", location="global")
+            vertexai.init(project=_require_gcp_project_id(), location=VERTEX_LOCATION)
         
-        # Use gemini-3.5-flash available at the global endpoint
-        model_id = "gemini-3.5-flash"
-        model = GenerativeModel(model_id)
+        model = GenerativeModel(model_name)
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
         print(f"⚠️ Vertex AI call failed: {e}")
+        return None
+
+
+def _call_gemini_api(prompt: str, model_name: str, gemini_api_key: Optional[str] = None) -> Optional[str]:
+    if not _gemini_api_allowed():
+        return None
+
+    api_key = gemini_api_key or os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return None
+
+    try:
+        import google.generativeai as genai
+
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(model_name)
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception as e:
+        print(f"⚠️ Gemini API call failed: {e}")
         return None
 
 
@@ -247,42 +358,41 @@ def _predict_slicing_plan_with_gemini(asset_name: str, bounds_info: str = "", ge
         "3. SPIN: Objects that rotate continuously around an axis (e.g., fans, propellers, windmills).\n"
         "   Provide 'spin_axis' (e.g. [0, 0, 1] for Z-axis rotation) and 'y_split_ratio' (e.g. 0.6 to cut the blades from the base).\n"
         "4. STATIC: Objects that do not open (e.g., sofas, swords, tables).\n"
+        "Also provide 'confidence' from 0.0 to 1.0, 'should_animate' as a boolean, and a short 'reason'.\n"
+        "If the asset is ambiguous or does not have an obvious mechanical moving part, choose STATIC with should_animate=false.\n"
         "Respond ONLY with valid JSON. Examples:\n"
-        "{\"archetype\": \"HORIZONTAL_SPLIT\", \"y_split_ratio\": 0.1, \"hinge_axis\": [1, 0, 0], \"pivot_edge\": \"max_z\"}\n"
-        "{\"archetype\": \"VERTICAL_SPLIT\", \"hinge_axis\": [0, 1, 0], \"pivot_edge\": \"min_x\"}\n"
-        "{\"archetype\": \"SPIN\", \"spin_axis\": [0, 0, 1], \"y_split_ratio\": 0.6}\n"
-        "{\"archetype\": \"STATIC\"}"
+        "{\"archetype\": \"HORIZONTAL_SPLIT\", \"confidence\": 0.86, \"should_animate\": true, \"reason\": \"clear hinged lid\", \"y_split_ratio\": 0.55, \"hinge_axis\": [1, 0, 0], \"pivot_edge\": \"max_z\"}\n"
+        "{\"archetype\": \"VERTICAL_SPLIT\", \"confidence\": 0.82, \"should_animate\": true, \"reason\": \"door panel within frame\", \"hinge_axis\": [0, 1, 0], \"pivot_edge\": \"min_x\"}\n"
+        "{\"archetype\": \"SPIN\", \"confidence\": 0.78, \"should_animate\": true, \"reason\": \"rotating blade assembly\", \"spin_axis\": [0, 0, 1], \"y_split_ratio\": 0.6}\n"
+        "{\"archetype\": \"STATIC\", \"confidence\": 0.9, \"should_animate\": false, \"reason\": \"no obvious moving part\"}"
     )
     
     fallback = {"archetype": "STATIC"}
     asset_lower = asset_name.lower()
     if "door" in asset_lower or "gate" in asset_lower:
-        fallback = {"archetype": "VERTICAL_SPLIT"}
+        fallback = {"archetype": "VERTICAL_SPLIT", "confidence": 0.8, "should_animate": True, "reason": "keyword matched door/gate"}
     elif "chest" in asset_lower or "box" in asset_lower or "crate" in asset_lower:
-        fallback = {"archetype": "HORIZONTAL_SPLIT", "y_split_ratio": 0.55, "hinge_axis": [1, 0, 0], "pivot_edge": "max_z"}
+        fallback = {"archetype": "HORIZONTAL_SPLIT", "confidence": 0.8, "should_animate": True, "reason": "keyword matched box/chest", "y_split_ratio": 0.55, "hinge_axis": [1, 0, 0], "pivot_edge": "max_z"}
     elif "phone" in asset_lower:
-        fallback = {"archetype": "HORIZONTAL_SPLIT", "y_split_ratio": 0.5, "hinge_axis": [1, 0, 0], "pivot_edge": "max_z"}
+        fallback = {"archetype": "HORIZONTAL_SPLIT", "confidence": 0.72, "should_animate": True, "reason": "keyword matched foldable phone", "y_split_ratio": 0.5, "hinge_axis": [1, 0, 0], "pivot_edge": "max_z"}
     elif "clam" in asset_lower or "shell" in asset_lower:
-        fallback = {"archetype": "HORIZONTAL_SPLIT", "y_split_ratio": 0.5, "hinge_axis": [1, 0, 0], "pivot_edge": "max_z"}
+        fallback = {"archetype": "HORIZONTAL_SPLIT", "confidence": 0.75, "should_animate": True, "reason": "keyword matched clamshell/shell", "y_split_ratio": 0.5, "hinge_axis": [1, 0, 0], "pivot_edge": "max_z"}
     elif "laptop" in asset_lower or "computer" in asset_lower:
-        fallback = {"archetype": "HORIZONTAL_SPLIT", "y_split_ratio": 0.1, "hinge_axis": [1, 0, 0], "pivot_edge": "max_z"}
+        fallback = {"archetype": "HORIZONTAL_SPLIT", "confidence": 0.78, "should_animate": True, "reason": "keyword matched laptop", "y_split_ratio": 0.1, "hinge_axis": [1, 0, 0], "pivot_edge": "max_z"}
     elif "fan" in asset_lower or "propeller" in asset_lower or "windmill" in asset_lower:
-        fallback = {"archetype": "SPIN", "spin_axis": [0, 0, 1], "y_split_ratio": 0.6}
+        fallback = {"archetype": "SPIN", "confidence": 0.78, "should_animate": True, "reason": "keyword matched spinning object", "spin_axis": [0, 0, 1], "y_split_ratio": 0.6}
 
     try:
         raw = _call_gemini_vertex(instruction, "gemini-2.5-flash-lite")
         if raw:
             return json.loads(_clean_json_markdown(raw))
     except Exception as e:
-        print(f"âš ï¸  Vertex AI classification failed: {e}")
-        
-    if gemini_api_key:
+        print(f"⚠️ Vertex AI classification failed: {e}")
+
+    raw = _call_gemini_api(instruction, "gemini-3.5-flash", gemini_api_key=gemini_api_key)
+    if raw:
         try:
-            import google.generativeai as genai
-            genai.configure(api_key=gemini_api_key)
-            model = genai.GenerativeModel('gemini-3.5-flash')
-            response = model.generate_content(instruction)
-            return json.loads(_clean_json_markdown(response.text))
+            return json.loads(_clean_json_markdown(raw))
         except Exception as e:
             print(f"⚠️ Gemini classification failed: {e}")
             
@@ -292,34 +402,77 @@ def _predict_slicing_plan_with_gemini(asset_name: str, bounds_info: str = "", ge
 def _generate_imagen_vertex(prompt: str) -> Optional[bytes]:
     """Generates an image using Vertex AI Imagen 3 API."""
     import os
+
+    if not _vertex_allowed():
+        return None
+
     try:
         import vertexai
         from vertexai.preview.vision_models import ImageGenerationModel
         
-        # Authenticate with Vertex AI using the same logic as text generation
-        gcp_token = os.environ.get("GCP_ACCESS_TOKEN") or os.environ.get("GCLOUD_TOKEN")
-        if gcp_token:
-            import google.oauth2.credentials
-            credentials = google.oauth2.credentials.Credentials(token=gcp_token)
+        credentials = _get_vertex_credentials()
+        if credentials:
             vertexai.init(
-                project="gen-lang-client-0614032633",
-                location="global",
+                project=_require_gcp_project_id(),
+                location=VERTEX_LOCATION,
                 credentials=credentials
             )
         else:
-            vertexai.init(project="gen-lang-client-0614032633", location="global")
+            vertexai.init(project=_require_gcp_project_id(), location=VERTEX_LOCATION)
             
-        model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-001")
-        images = model.generate_images(
-            prompt=prompt,
-            number_of_images=1,
-            language="en",
-            aspect_ratio="1:1"
-        )
-        if images:
-            return images[0]._image_bytes
+        for model_id in _get_image_model_candidates():
+            try:
+                print(f"🖼️ Attempting Vertex image model: {model_id}")
+                model = ImageGenerationModel.from_pretrained(model_id)
+                images = model.generate_images(
+                    prompt=prompt,
+                    number_of_images=1,
+                    language="en",
+                    aspect_ratio="1:1"
+                )
+                if images:
+                    print(f"✅ Vertex image model succeeded: {model_id}")
+                    return images[0]._image_bytes
+            except Exception as inner_e:
+                print(f"⚠️ Vertex image model failed ({model_id}): {inner_e}")
     except Exception as e:
         print(f"⚠️ _generate_imagen_vertex failed: {e}")
+    return None
+
+
+def _generate_imagen_gemini_api(prompt: str, gemini_api_key: Optional[str] = None) -> Optional[bytes]:
+    if not _gemini_api_allowed():
+        return None
+
+    api_key = gemini_api_key or os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return None
+
+    try:
+        from google import genai
+
+        client = genai.Client(api_key=api_key)
+        for model_id in _get_image_model_candidates():
+            try:
+                print(f"🖼️ Attempting Gemini API image model: {model_id}")
+                result = client.models.generate_images(
+                    model=model_id,
+                    prompt=prompt,
+                    config=dict(
+                        number_of_images=1,
+                        aspect_ratio="1:1"
+                    )
+                )
+                if result.generated_images:
+                    print(f"✅ Gemini API image model succeeded: {model_id}")
+                    return result.generated_images[0].image.image_bytes
+            except Exception as inner_e:
+                print(f"⚠️ Gemini API image model failed ({model_id}): {inner_e}")
+    except ImportError:
+        print("⚠️ google-genai package not found. Image generation via API key requires it.")
+    except Exception as e:
+        print(f"⚠️ Gemini API Imagen generation failed: {e}")
+
     return None
 
 
@@ -353,10 +506,13 @@ def generate_3d_mesh(prompt: str, style: str = "lowpoly", issue_desc: str = "", 
     import sys
     import tempfile
 
+    _ensure_l4_gpu_runtime("Stage 3: generate_3d_mesh")
+
     # ---------------------------------------------------------
     # Integrate Google Gemini AI to enhance prompt logic
     # ---------------------------------------------------------
     gemini_api_key = os.environ.get("GEMINI_API_KEY")
+    llm_provider = _get_llm_provider()
     enhanced_prompt = None
 
     base_prompt = f"Title: {prompt}\nDescription: {issue_desc}" if issue_desc else prompt
@@ -368,26 +524,18 @@ def generate_3d_mesh(prompt: str, style: str = "lowpoly", issue_desc: str = "", 
 
     # Try Vertex AI first (gcloud token bypass for dev/testing)
     try:
-        print("🧠 [Vertex AI Bypass] Attempting to reach out to Gemini via Vertex AI...")
+        print(f"🧠 [LLM:{llm_provider}] Attempting Vertex AI prompt enhancement...")
         enhanced_prompt = _call_gemini_vertex(ai_instruction, "gemini-3.5-flash")
         if enhanced_prompt:
-            print(f"✨ [Vertex AI Bypass] Enhanced Prompt: '{enhanced_prompt}'")
+            print(f"✨ [LLM:{llm_provider}] Vertex enhanced prompt: '{enhanced_prompt}'")
     except Exception as e:
         print(f"⚠️ Vertex AI bypass failed: {e}")
 
     # Fallback to standard Google AI API Key if Vertex AI didn't return a prompt
-    if not enhanced_prompt and gemini_api_key:
-        try:
-            print("🧠 [Modal GPU Serverless] Reaching out to Gemini API to auto-enhance art prompt...")
-            # We install `google-genai` dynamically or it must be added to pip_install
-            import google.generativeai as genai
-            genai.configure(api_key=gemini_api_key)
-            model = genai.GenerativeModel('gemini-3.5-flash')
-            response = model.generate_content(ai_instruction)
-            enhanced_prompt = response.text.strip()
-            print(f"✨ [Modal GPU Serverless] Gemini Enhanced Prompt: '{enhanced_prompt}'")
-        except Exception as e:
-            print(f"⚠️ Failed to call Gemini API ({e}). Falling back to raw prompt.")
+    if not enhanced_prompt:
+        enhanced_prompt = _call_gemini_api(ai_instruction, "gemini-3.5-flash", gemini_api_key=gemini_api_key)
+        if enhanced_prompt:
+            print(f"✨ [LLM:{llm_provider}] Gemini API enhanced prompt: '{enhanced_prompt}'")
 
     # Use enhanced prompt if successful, otherwise fallback to raw combination
     if enhanced_prompt:
@@ -530,7 +678,7 @@ def generate_3d_mesh(prompt: str, style: str = "lowpoly", issue_desc: str = "", 
     secrets=[modal.Secret.from_name("gitmesh-keys")] if modal else [],
     volumes={"/mnt/data": storage_volume} if storage_volume else {}
 )
-def validate_glb(glb_path: str, issue_iid: str = None, gitlab_token: str = None) -> Dict[str, Any]:
+def validate_glb(glb_path: str = "", issue_iid: str = None, gitlab_token: str = None) -> Dict[str, Any]:
     """
     Validates a GLB file for structural integrity.
     Checks: binary header, JSON validity, buffer alignment, vertex/index counts, manifoldness.
@@ -722,7 +870,7 @@ def validate_glb(glb_path: str, issue_iid: str = None, gitlab_token: str = None)
     secrets=[modal.Secret.from_name("gitmesh-keys")] if modal else [],
     volumes={"/mnt/data": storage_volume} if storage_volume else {}
 )
-def segment_mesh(glb_url: str, prompt_tags: str, issue_iid: str = None, gitlab_token: str = None) -> Dict[str, Any]:
+def segment_mesh(glb_url: str = "", prompt_tags: str = "", issue_iid: str = None, gitlab_token: str = None) -> Dict[str, Any]:
     """
     Serverless GPU function running Gemini-Guided Slicing Partitioner.
     Calculates 3D mesh bounds, queries Gemini for the slicing plan,
@@ -734,12 +882,14 @@ def segment_mesh(glb_url: str, prompt_tags: str, issue_iid: str = None, gitlab_t
     import traceback
     import tempfile
 
-    tags = [tag.strip() for tag in prompt_tags.split(",")]
+    _ensure_l4_gpu_runtime("Stage 4: segment_mesh")
+
+    tags = [tag.strip() for tag in prompt_tags.split(",")] if prompt_tags else []
     segmented_parts = {}
     
     storage_dir = "/mnt/data/assets"
     os.makedirs(storage_dir, exist_ok=True)
-    base_name = os.path.basename(glb_url) if glb_url and glb_url != "placeholder" else "trellis_mesh.glb"
+    base_name = os.path.basename(glb_url) if glb_url and glb_url not in ["placeholder", ""] else "trellis_mesh.glb"
     
     # Resolve the correct input mesh path by looking for any Trellis output GLB in the folder if the file is not found
     if base_name == "trellis_mesh.glb" or not os.path.exists(os.path.join(storage_dir, base_name)):
@@ -834,6 +984,19 @@ def segment_mesh(glb_url: str, prompt_tags: str, issue_iid: str = None, gitlab_t
                 json.dump(gemini_plan, f, indent=2)
 
             gemini_archetype = gemini_plan.get("archetype", "STATIC")
+            try:
+                plan_confidence = float(gemini_plan.get("confidence", 0.65))
+            except (TypeError, ValueError):
+                plan_confidence = 0.0
+            should_animate = gemini_plan.get("should_animate", True)
+            if isinstance(should_animate, str):
+                should_animate = should_animate.strip().lower() not in {"false", "0", "no", "static"}
+            plan_reason = str(gemini_plan.get("reason", ""))[:160]
+
+            if plan_confidence < 0.55 or not should_animate:
+                print(f"⚠️ Low-confidence or non-animated slicing plan. confidence={plan_confidence}, should_animate={should_animate}, reason={plan_reason}")
+                gemini_archetype = "STATIC"
+
             if gemini_archetype == "VERTICAL_SPLIT":
                 archetype = "VERTICAL_SPLIT"
                 operation_type = "SMART_BISECT"
@@ -857,6 +1020,16 @@ def segment_mesh(glb_url: str, prompt_tags: str, issue_iid: str = None, gitlab_t
                 archetype = gemini_archetype
                 operation_type = "SMART_BISECT"
                 y_split = gemini_plan.get("y_split_ratio", 0.55 if archetype == "HORIZONTAL_SPLIT" else 0.6)
+                try:
+                    y_split = float(y_split)
+                except (TypeError, ValueError):
+                    y_split = 0.55 if archetype == "HORIZONTAL_SPLIT" else 0.6
+                if any(k in asset_name.lower() for k in ["laptop", "phone", "fold", "flip", "clamshell"]):
+                    y_split = max(0.08, min(0.55, y_split))
+                elif archetype == "HORIZONTAL_SPLIT":
+                    y_split = max(0.35, min(0.75, y_split))
+                else:
+                    y_split = max(0.35, min(0.75, y_split))
                 slicing_plan = {
                     "operation_type": operation_type,
                     "archetype": archetype,
@@ -948,6 +1121,31 @@ def segment_mesh(glb_url: str, prompt_tags: str, issue_iid: str = None, gitlab_t
                 }
                 print(f"📦 Part {part_name} ({semantic_name}): {len(part_mesh.faces)} faces ({segmented_parts[part_name]['face_fraction']*100:.1f}%), center: {center}")
 
+            moving_fraction = segmented_parts.get("part_0", {}).get("face_fraction")
+            if operation_type == "SMART_BISECT" and isinstance(moving_fraction, (int, float)) and (moving_fraction < 0.08 or moving_fraction > 0.9):
+                print(f"⚠️ Rejecting implausible split for '{asset_name}'. part_0 face fraction={moving_fraction}; falling back to STATIC.")
+                archetype = "STATIC"
+                operation_type = "NONE"
+                slicing_plan = {
+                    "operation_type": operation_type,
+                    "archetype": archetype,
+                    "parts": [],
+                    "rejected_reason": f"implausible moving part face fraction {moving_fraction}"
+                }
+                face_ids[:] = 0
+                label_mapping = {"part_0": "base"}
+                segmented_parts = {}
+                segmented_parts["part_0"] = {
+                    "part_id": "part_0",
+                    "relative_mesh_index": 0,
+                    "bounding_box_center": mesh.centroid.tolist(),
+                    "bounding_box": mesh.bounds.tolist(),
+                    "vertex_count": len(mesh.vertices),
+                    "face_count": len(mesh.faces),
+                    "face_fraction": 1.0,
+                    "source": "conservative-static-rejection"
+                }
+
             # 4. Save face_ids.json
             seg_dir = os.path.join(storage_dir, "v2-segmented")
             os.makedirs(seg_dir, exist_ok=True)
@@ -961,10 +1159,13 @@ def segment_mesh(glb_url: str, prompt_tags: str, issue_iid: str = None, gitlab_t
             seg_metadata = {
                 "status": "success",
                 "original_mesh_url": glb_url,
+                "asset_name": asset_name,
                 "detected_parts_count": len(segmented_parts),
                 "operation_type": operation_type,
                 "parts": segmented_parts,
                 "slicing_plan": slicing_plan,
+                "plan_confidence": plan_confidence,
+                "plan_reason": plan_reason,
                 "x_min": x_min, "x_max": x_max, "x_extent": x_extent,
                 "y_min": y_min, "y_max": y_max, "y_extent": y_extent,
                 "z_min": z_min, "z_max": z_max, "z_extent": z_extent,
@@ -1138,6 +1339,8 @@ def generate_reference_image(prompt: str, issue_desc: str = "", issue_iid: str =
     import os
     from PIL import Image, ImageDraw
 
+    _ensure_l4_gpu_runtime("Stage 2: generate_reference_image")
+
     storage_dir = "/mnt/data/assets"
     os.makedirs(storage_dir, exist_ok=True)
     ref_path = os.path.join(storage_dir, "v0-reference", "reference.png")
@@ -1145,9 +1348,10 @@ def generate_reference_image(prompt: str, issue_desc: str = "", issue_iid: str =
 
     # Try Vertex AI first (gcloud token bypass for dev/testing)
     gemini_api_key = os.environ.get("GEMINI_API_KEY")
+    llm_provider = _get_llm_provider()
     enhanced_prompt = prompt
     try:
-        print("🧠 [Vertex AI Bypass] Attempting to reach out to Gemini via Vertex AI for Imagen prompt...")
+        print(f"🧠 [LLM:{llm_provider}] Attempting Vertex AI enhancement for Imagen prompt...")
         base = f"Title: {prompt}\nDescription: {issue_desc}" if issue_desc else prompt
         ai_instruction = (
             f"You are an expert game 3D technical artist. The user wants to generate a 3D asset: '{base}'. "
@@ -1159,34 +1363,29 @@ def generate_reference_image(prompt: str, issue_desc: str = "", issue_iid: str =
         res = _call_gemini_vertex(ai_instruction, "gemini-3.5-flash")
         if res:
             enhanced_prompt = res
-            print(f"✨ [Imagen Stage] [Vertex AI Bypass] Enhanced Prompt: '{enhanced_prompt}'")
+            print(f"✨ [Imagen Stage] [LLM:{llm_provider}] Vertex enhanced prompt: '{enhanced_prompt}'")
     except Exception as e:
         print(f"⚠️ Vertex AI bypass failed: {e}")
 
     # Fallback to standard Google AI API Key if Vertex AI didn't return a prompt
-    if enhanced_prompt == prompt and gemini_api_key:
-        try:
-            import google.generativeai as genai
-            genai.configure(api_key=gemini_api_key)
-            model = genai.GenerativeModel('gemini-3.5-flash')
-            base = f"Title: {prompt}\nDescription: {issue_desc}" if issue_desc else prompt
-            ai_instruction = (
-                f"You are an expert game 3D technical artist. The user wants to generate a 3D asset: '{base}'. "
-                "Rewrite this into a single, highly descriptive physical prompt optimized for image generation (Imagen). "
-                "IMPORTANT: The object MUST have strict rectangular geometry with straight edges and sharp 90-degree corners. "
-                "Do NOT generate arched, oval, or curved shapes. Keep the silhouette perfectly blocky and rectangular. "
-                "Include visual materials, textures, geometry shapes, and lighting properties. Keep it under 2 sentences."
-            )
-            response = model.generate_content(ai_instruction)
-            enhanced_prompt = response.text.strip()
-            print(f"✨ [Imagen Stage] Gemini Enhanced Prompt: '{enhanced_prompt}'")
-        except Exception as e:
-            print(f"⚠️ Gemini enhancement failed ({e}), using raw prompt.")
+    if enhanced_prompt == prompt:
+        base = f"Title: {prompt}\nDescription: {issue_desc}" if issue_desc else prompt
+        ai_instruction = (
+            f"You are an expert game 3D technical artist. The user wants to generate a 3D asset: '{base}'. "
+            "Rewrite this into a single, highly descriptive physical prompt optimized for image generation (Imagen). "
+            "IMPORTANT: The object MUST have strict rectangular geometry with straight edges and sharp 90-degree corners. "
+            "Do NOT generate arched, oval, or curved shapes. Keep the silhouette perfectly blocky and rectangular. "
+            "Include visual materials, textures, geometry shapes, and lighting properties. Keep it under 2 sentences."
+        )
+        fallback_prompt = _call_gemini_api(ai_instruction, "gemini-3.5-flash", gemini_api_key=gemini_api_key)
+        if fallback_prompt:
+            enhanced_prompt = fallback_prompt
+            print(f"✨ [Imagen Stage] [LLM:{llm_provider}] Gemini API enhanced prompt: '{enhanced_prompt}'")
 
     # Try to generate real image via Vertex AI Imagen
     img_bytes = None
     try:
-        print("📷 [Vertex AI Bypass] Attempting to generate reference image via Vertex AI Imagen...")
+        print(f"📷 [LLM:{llm_provider}] Attempting Vertex AI Imagen generation...")
         img_bytes = _generate_imagen_vertex(enhanced_prompt)
         if img_bytes:
             with open(ref_path, "wb") as f:
@@ -1196,31 +1395,13 @@ def generate_reference_image(prompt: str, issue_desc: str = "", issue_iid: str =
         print(f"⚠️ Vertex AI Imagen generation failed: {e}")
 
     # Fallback to standard Google AI API Key if Vertex AI didn't return an image
-    if not img_bytes and gemini_api_key:
-        try:
-            print("📷 [Imagen Stage] Attempting to generate reference image via Gemini API Key...")
-            try:
-                from google import genai
-                client = genai.Client(api_key=gemini_api_key)
-                result = client.models.generate_images(
-                    model='imagen-3.0-generate-001',
-                    prompt=enhanced_prompt,
-                    config=dict(
-                        number_of_images=1,
-                        aspect_ratio="1:1"
-                    )
-                )
-                if result.generated_images:
-                    img_bytes = result.generated_images[0].image.image_bytes
-            except ImportError:
-                print("⚠️ google-genai package not found. Image generation via API key requires it.")
-            
-            if img_bytes:
-                with open(ref_path, "wb") as f:
-                    f.write(img_bytes)
-                print(f"📷 [Stage 2] Real reference image generated via Gemini API and saved to {ref_path}")
-        except Exception as e:
-            print(f"⚠️ Gemini API Imagen generation failed: {e}")
+    if not img_bytes:
+        print(f"📷 [LLM:{llm_provider}] Attempting Gemini API Imagen fallback...")
+        img_bytes = _generate_imagen_gemini_api(enhanced_prompt, gemini_api_key=gemini_api_key)
+        if img_bytes:
+            with open(ref_path, "wb") as f:
+                f.write(img_bytes)
+            print(f"📷 [Stage 2] Real reference image generated via Gemini API and saved to {ref_path}")
 
     if not img_bytes:
         # Fall back to procedural generation if Imagen unavailable
@@ -1265,7 +1446,7 @@ def generate_reference_image(prompt: str, issue_desc: str = "", issue_iid: str =
     secrets=[modal.Secret.from_name("gitmesh-keys")] if modal else [],
     volumes={"/mnt/data": storage_volume} if storage_volume else {}
 )
-def label_parts(parts_json: str, asset_name: str, issue_iid: str = None, gitlab_token: str = None) -> Dict[str, Any]:
+def label_parts(parts_json: str = "{}", asset_name: str = "", issue_iid: str = None, gitlab_token: str = None) -> Dict[str, Any]:
     """
     Stage 7: Label segmented parts using Gemini Flash Lite (VLM classification).
     Falls back to heuristic naming if API unavailable.
@@ -1324,6 +1505,7 @@ def label_parts(parts_json: str, asset_name: str, issue_iid: str = None, gitlab_
     labels = {}
 
     gemini_api_key = os.environ.get("GEMINI_API_KEY")
+    llm_provider = _get_llm_provider()
     
     # Build spatial context for each part so Gemini can reason about positions
     part_descriptions = []
@@ -1362,29 +1544,26 @@ def label_parts(parts_json: str, asset_name: str, issue_iid: str = None, gitlab_
     # Try Vertex AI first (gcloud token bypass for dev/testing)
     raw = None
     try:
-        print("🏷️ [Vertex AI Bypass] Attempting classification via Vertex AI...")
+        print(f"🏷️ [LLM:{llm_provider}] Attempting classification via Vertex AI...")
         raw = _call_gemini_vertex(instruction, "gemini-2.5-flash-lite")
         print(f"DEBUG raw response: {repr(raw)}")
         if raw:
             raw = _clean_json_markdown(raw)
             labels = json.loads(raw)
-            print(f"🏷️ [Vertex AI Bypass] Labels: {labels}")
+            print(f"🏷️ [LLM:{llm_provider}] Vertex labels: {labels}")
     except Exception as e:
         print(f"⚠️ Vertex AI labeling failed: {e}")
 
     # Fallback to standard Google AI API Key
-    if not labels and gemini_api_key:
-        try:
-            import google.generativeai as genai
-            genai.configure(api_key=gemini_api_key)
-            model = genai.GenerativeModel('gemini-3.5-flash')  # Flash Lite for VLM
-            response = model.generate_content(instruction)
-            raw = response.text.strip()
-            raw = _clean_json_markdown(raw)
-            labels = json.loads(raw)
-            print(f"🏷️ [Stage 7] Gemini Flash Lite labels: {labels}")
-        except Exception as e:
-            print(f"⚠️ Flash Lite labeling failed ({e}), using heuristic fallback.")
+    if not labels:
+        raw = _call_gemini_api(instruction, "gemini-3.5-flash", gemini_api_key=gemini_api_key)
+        if raw:
+            try:
+                raw = _clean_json_markdown(raw)
+                labels = json.loads(raw)
+                print(f"🏷️ [Stage 7] Gemini Flash Lite labels: {labels}")
+            except Exception as e:
+                print(f"⚠️ Flash Lite labeling failed ({e}), using heuristic fallback.")
 
     # Heuristic fallback
     if not labels:
@@ -1425,7 +1604,7 @@ def label_parts(parts_json: str, asset_name: str, issue_iid: str = None, gitlab_
     secrets=[modal.Secret.from_name("gitmesh-keys")] if modal else [],
     volumes={"/mnt/data": storage_volume} if storage_volume else {}
 )
-def generate_animation_plan(labels_json: str, asset_name: str, issue_iid: str = None, gitlab_token: str = None) -> Dict[str, Any]:
+def generate_animation_plan(labels_json: str = "{}", asset_name: str = "", issue_iid: str = None, gitlab_token: str = None) -> Dict[str, Any]:
     """
     Stage 8: Generate animation plan JSON using Gemini Flash (spatial reasoning).
     Uses the 5 motion primitives: ROTATE_HINGE, ROTATE_PIVOT, SLIDE, LATCH_RELEASE, NONE.
@@ -1476,6 +1655,7 @@ def generate_animation_plan(labels_json: str, asset_name: str, issue_iid: str = 
         predicted_hinge_axis = gemini_plan.get("hinge_axis", [0, 1, 0])
         print("🎬 [Template] Generating VERTICAL_SPLIT (Door) animation template...")
         animation_plan = {
+            "asset_name": asset_name,
             "steps": [
                 {
                     "part": "part_0", # door panel
@@ -1483,7 +1663,7 @@ def generate_animation_plan(labels_json: str, asset_name: str, issue_iid: str = 
                     "axis": predicted_hinge_axis,
                     "pivot": [0, 0, 0], 
                     "pivot_edge": predicted_pivot_edge,
-                    "angle_deg": -90,
+                    "angle_deg": -60,
                     "duration_s": 1.5,
                     "order": 1,
                     "parent": "part_1", # frame
@@ -1495,6 +1675,7 @@ def generate_animation_plan(labels_json: str, asset_name: str, issue_iid: str = 
     elif gemini_archetype == "HORIZONTAL_SPLIT":
         print("🎬 [Template] Generating HORIZONTAL_SPLIT (Chest) animation template...")
         animation_plan = {
+            "asset_name": asset_name,
             "steps": [
                 {
                     "part": "part_0", # lid
@@ -1502,7 +1683,7 @@ def generate_animation_plan(labels_json: str, asset_name: str, issue_iid: str = 
                     "axis": predicted_hinge_axis,
                     "pivot": [0, 0, 0],
                     "pivot_edge": predicted_pivot_edge,
-                    "angle_deg": -90,
+                    "angle_deg": -60,
                     "duration_s": 1.5,
                     "order": 1,
                     "parent": "part_1", # base
@@ -1515,6 +1696,7 @@ def generate_animation_plan(labels_json: str, asset_name: str, issue_iid: str = 
         predicted_spin_axis = gemini_plan.get("spin_axis", [0, 0, 1])
         print("🎬 [Template] Generating SPIN (Fan/Propeller) animation template...")
         animation_plan = {
+            "asset_name": asset_name,
             "steps": [
                 {
                     "part": "part_0", # head/blades
@@ -1529,7 +1711,7 @@ def generate_animation_plan(labels_json: str, asset_name: str, issue_iid: str = 
         }
     else:
         print("🎬 [Template] Generating STATIC asset animation template (NONE)...")
-        animation_plan = {"steps": []}
+        animation_plan = {"asset_name": asset_name, "steps": []}
 
     # Save animation plan
     storage_dir = "/mnt/data/assets"
@@ -1565,7 +1747,7 @@ def generate_animation_plan(labels_json: str, asset_name: str, issue_iid: str = 
     secrets=[modal.Secret.from_name("gitmesh-keys")] if modal else [],
     volumes={"/mnt/data": storage_volume} if storage_volume else {}
 )
-def validate_animation_plan(plan_json: str, labels_json: str, issue_iid: str = None, gitlab_token: str = None) -> Dict[str, Any]:
+def validate_animation_plan(plan_json: str = "{}", labels_json: str = "{}", issue_iid: str = None, gitlab_token: str = None) -> Dict[str, Any]:
     """
     Stage 9: Deterministic geometric validation of animation plan.
     Pure Python — no LLM at runtime. ~ms execution.
@@ -1610,6 +1792,7 @@ def validate_animation_plan(plan_json: str, labels_json: str, issue_iid: str = N
 
     # Load segmentation metadata to retrieve bounding boxes
     parts_metadata = {}
+    seg_data = {}
     seg_path = "/mnt/data/assets/v2-segmented/segmentation.json"
     if os.path.exists(seg_path):
         try:
@@ -1618,6 +1801,14 @@ def validate_animation_plan(plan_json: str, labels_json: str, issue_iid: str = N
                 parts_metadata = seg_data.get("parts", {})
         except Exception as e:
             print(f"⚠️ Failed to load parts metadata: {e}")
+
+    asset_name = str(plan.get("asset_name") or seg_data.get("asset_name") or "").lower()
+    close_motion = any(k in asset_name for k in ["laptop", "phone", "fold", "flip", "clamshell"])
+    slicing_plan = seg_data.get("slicing_plan", {}) if isinstance(seg_data, dict) else {}
+    archetype = slicing_plan.get("archetype", "")
+    x_extent = float(seg_data.get("x_extent", 0.0) or 0.0)
+    y_extent = float(seg_data.get("y_extent", 0.0) or 0.0)
+    z_extent = float(seg_data.get("z_extent", 0.0) or 0.0)
 
     RULES = {
         "ROTATE_HINGE":  {"max_angle": 135, "pivot_must_be": "boundary"},
@@ -1630,6 +1821,16 @@ def validate_animation_plan(plan_json: str, labels_json: str, issue_iid: str = N
     errors = []
     warnings = []
     auto_fixes = []
+
+    def _mark_static(reason: str) -> None:
+        plan["steps"] = []
+        warnings.append(reason)
+        auto_fixes.append(f"Conservative static fallback: {reason}")
+
+    if archetype == "HORIZONTAL_SPLIT" and y_extent and max(x_extent, z_extent) and y_extent > max(x_extent, z_extent) * 1.25:
+        _mark_static("horizontal hinge rejected because asset is taller than it is wide/deep")
+    elif archetype == "VERTICAL_SPLIT" and y_extent and max(x_extent, z_extent) and y_extent < max(x_extent, z_extent) * 0.8:
+        _mark_static("vertical hinge rejected because asset is not tall enough for a door-like motion")
 
     # Pre-filter steps to ensure we don't have conflicting multiple animations for the same part
     # specifically spurious LATCH_RELEASE steps for the lid which break the pivot origin parsing
@@ -1693,6 +1894,11 @@ def validate_animation_plan(plan_json: str, labels_json: str, issue_iid: str = N
                         break
                 if part_id and part_id in parts_metadata:
                     part_meta = parts_metadata[part_id]
+                    face_fraction = part_meta.get("face_fraction")
+                    if isinstance(face_fraction, (int, float)) and (face_fraction < 0.08 or face_fraction > 0.9):
+                        _mark_static(f"hinge part '{part_name}' has implausible face fraction {face_fraction}")
+                        break
+
                     bbox = part_meta.get("bounding_box", [])
                     if bbox and len(bbox) == 2:
                         px_min, py_min, pz_min = bbox[0]
@@ -1756,8 +1962,12 @@ def validate_animation_plan(plan_json: str, labels_json: str, issue_iid: str = N
                             
                             new_pivot = [target_x, -target_z, target_y]
                             new_axis = [1.0, 0.0, 0.0]
-                            if step.get("angle_deg", 0) > 0:
-                                step["angle_deg"] = -step["angle_deg"] # Lids open upwards
+                            target_angle = 45 if close_motion else -60
+                            if step.get("angle_deg", 0) != target_angle:
+                                old_angle = step.get("angle_deg", 0)
+                                step["angle_deg"] = target_angle
+                                direction = "closing" if close_motion else "opening"
+                                auto_fixes.append(f"{part_name}: set conservative {direction} hinge angle {old_angle}° → {target_angle}°")
                                 
                         elif axis[1] > 0.5: # Trimesh Y (Yaw) -> e.g. Door
                             target_x = split_val if (split_axis == "X" and split_val is not None) else px_min
@@ -1846,7 +2056,7 @@ def validate_animation_plan(plan_json: str, labels_json: str, issue_iid: str = N
     secrets=[modal.Secret.from_name("gitmesh-keys")] if modal else [],
     volumes={"/mnt/data": storage_volume} if storage_volume else {}
 )
-def animate_and_render_mesh(glb_url: str, animation_plan_json: str, issue_iid: str = None, gitlab_token: str = None) -> Dict[str, Any]:
+def animate_and_render_mesh(glb_url: str = "", animation_plan_json: str = "{}", issue_iid: str = None, gitlab_token: str = None) -> Dict[str, Any]:
     """
     Stage 10: Headless Blender animation and GLB export.
     Uses trimesh for procedural turntable animation when Blender is unavailable.
@@ -1917,7 +2127,7 @@ def animate_and_render_mesh(glb_url: str, animation_plan_json: str, issue_iid: s
     close_frames = current_frame - 1
     total_frames = current_frame + hold_frames + close_frames
 
-    base_name = os.path.basename(glb_url) if glb_url and glb_url != "placeholder" else "trellis_mesh.glb"
+    base_name = os.path.basename(glb_url) if glb_url and glb_url not in ["placeholder", ""] else "trellis_mesh.glb"
     
     # We no longer load the segmented GLB directly because it loses UV mapping.
     # Instead, we load face_ids.json and slice the original mesh in Blender.

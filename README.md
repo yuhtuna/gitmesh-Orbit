@@ -8,24 +8,24 @@ By utilizing a ChatOps-driven workflow, **GitLab's Issue Board and Merge Request
 
 ## 🚀 How It Works (The 10-Step Pipeline)
 
-When a developer labels a GitLab issue `asset:generate`, the **Google Agent Development Kit (ADK)**-powered brain takes total control, executing a flawless, sequential 10-step development pipeline:
+When a developer opens a GitLab issue with a title that starts with `MeshGen:`, the **Google Agent Development Kit (ADK)**-powered brain takes total control, executing a sequential 10-step development pipeline:
 
 ```mermaid
 graph TD
     subgraph GitLab [1. UI / ChatOps Interface]
-        A["GitLab Issue Board (Label: asset:generate)"] -->|1. Intercept Issue| C
+        A["GitLab Issue Board (Title Prefix: MeshGen:)"] -->|1. Intercept Issue| C
         B["GitLab Merge Request Workspace"] -.-|9. Commits Rigged GLB & MP4| H
         B -.-|10. Posts Delivery Link| I["Final Review / Merge ✅"]
     end
 
     subgraph Brain [2. Orchestration Brain - Google Agent SDK]
-        C["Google ADK Agent (Gemini 3.1 Flash)"] <-->|Bidirectional Action Discovery| D["Model Context Protocol (MCP) Server"]
+        C["Google ADK Agent (Gemini 3.5 Flash)"] <-->|Bidirectional Action Discovery| D["Model Context Protocol (MCP) Server"]
         C -->|2, 4, 7. Progression Status Comments| B
     end
 
     subgraph Compute [3. Technical Art Compute Layer - Modal serverless GPU]
-        C -->|3. Generate Base Mesh| E["Trellis 2 (A10G GPU)<br/>Sparse Reconstructor"]
-        C -->|5. Partition Submeshes| F["P3-SAM 3D (A10G GPU)<br/>Segment Anything Model"]
+        C -->|3. Generate Base Mesh| E["Trellis 2 (L4 GPU)<br/>Sparse Reconstructor"]
+        C -->|5. Partition Submeshes| F["P3-SAM 3D (L4 GPU)<br/>Segment Anything Model"]
         C -->|8. Animate & Render| G["Headless Blender (Core Container)<br/>bpy Procedural Rigging"]
         E -->|Initial .glb| F
         F -->|Spatially Isolated Segments| G
@@ -65,17 +65,149 @@ GitMesh bridges cloud-native enterprise developer interfaces (GitLab) with state
 
 ## 🛠️ The Tech Stack
 
-- **google-adk (Google Agent Development Kit)**: High-level Python developer SDK mapping system instructions into safe tool belts, managing recursive function calls, and carrying out multi-step code and design tasks with `gemini-3.1-flash`.
+- **google-adk (Google Agent Development Kit)**: High-level Python developer SDK mapping system instructions into safe tool belts, managing recursive function calls, and carrying out multi-step code and design tasks with `gemini-3.5-flash`.
 - **Model Context Protocol (MCP)**: Universal context gateway standard allowing the Gemini developer brain to discover, call, and coordinate standard Git APIs securely over the `@gitlab/mcp-server-gitlab` dynamic tool schema.
 - **Modal Serverless Platforms**:
-  - **Trellis 2 (3D Generation)**: Runs serverless inference over state-of-the-art transformer 3D geometry builders on fast A10G GPUs.
+    - **Trellis 2 (3D Generation)**: Runs serverless inference over state-of-the-art transformer 3D geometry builders on L4 GPUs.
+    - **GPU profile**: Runtime is pinned to L4 to avoid binary/package incompatibilities across GPU classes.
   - **P3-SAM**: Runs high-accuracy part-to-semantic segmentation models.
   - **Blender headless**: Standard Debian environments running custom `bpy` tasks to rig objects programmatically.
 - **FastAPI / Python 3.11**: Event-driven client core orchestrating background tasks, handling continuous streams of webhook events, and driving state machine processes.
 
 ---
 
+## Remote Production Setup
+
+GitMesh is intended to run remotely from GitLab. Local setup is only for development and debugging; end users should only need to open a GitLab issue.
+
+One-time operator setup:
+
+0. Create a Google Cloud project and get the project ID:
+
+```bash
+# Create project (choose your own globally unique PROJECT_ID)
+gcloud projects create YOUR_PROJECT_ID --name="GitMesh Production"
+
+# Set active project for subsequent commands
+gcloud config set project YOUR_PROJECT_ID
+
+# Print active project ID (use this value for GCP_PROJECT_ID)
+gcloud config get-value project
+```
+
+If you prefer the Console UI:
+1. Go to Google Cloud Console, create/select a project.
+2. Open IAM & Admin > Settings.
+3. Copy the Project ID (not Project Name).
+
+1. Enable Vertex AI in the Google Cloud project:
+
+```bash
+gcloud services enable aiplatform.googleapis.com
+```
+
+2. Create a narrowly scoped service account for Vertex calls and grant it Vertex AI access. Store its JSON key securely.
+
+3. Create the Modal secret used by every GPU function:
+
+```bash
+modal secret create gitmesh-keys \
+    GCP_PROJECT_ID="YOUR_GCP_PROJECT_ID" \
+    GCP_SERVICE_ACCOUNT_JSON='{"type":"service_account",...}' \
+    LLM_PROVIDER="vertex" \
+    IMAGE_MODEL="imagen-4.0-fast-generate-001"
+```
+
+`GCP_PROJECT_ID` is required. GitMesh no longer uses any hardcoded fallback project ID.
+
+For short local testing only, `GCP_ACCESS_TOKEN` can be used instead of `GCP_SERVICE_ACCOUNT_JSON`, but access tokens expire and are not ideal for unattended GitLab pipelines.
+
+4. Add these GitLab CI/CD variables:
+
+```bash
+MODAL_TOKEN_ID="your-modal-token-id"
+MODAL_TOKEN_SECRET="your-modal-token-secret"
+GITLAB_API_TOKEN="project-or-bot-token-with-issue-comment-access"
+GITLAB_TRIGGER_TOKEN="your-gitlab-pipeline-trigger-token"
+GITLAB_WEBHOOK_SECRET="your-webhook-secret"
+```
+
+Do not set `GEMINI_API_KEY` in GitLab production. The CI preflight enforces `LLM_PROVIDER=vertex` and fails early if a Gemini API key is present.
+
+5. Trigger flow for end users:
+
+```text
+Open GitLab issue with title: MeshGen: <asset request>
+GitLab webhook/trigger starts CI
+CI validates remote config and calls Modal
+Modal runs L4 GPU stages and posts progress/results back to GitLab
+```
+
+---
+
 ## 🚀 Sandbox Simulation Runs
+
+GitMesh is configured with a **Vertex AI first** auth strategy. `GEMINI_API_KEY` is only a local fallback.
+
+### Vertex AI Setup (Recommended Default)
+
+If someone clones this repo, use the following setup steps before running pipeline stages that call Gemini/Imagen:
+
+```bash
+# 1) Install and initialize gcloud CLI (one-time)
+gcloud auth login
+gcloud config set project YOUR_GCP_PROJECT_ID
+
+# 2) Create Application Default Credentials for local SDK auth
+gcloud auth application-default login
+
+# 3) (Recommended) verify ADC token works
+gcloud auth application-default print-access-token
+```
+
+Minimum required Google Cloud APIs for this project:
+
+```bash
+gcloud services enable aiplatform.googleapis.com
+```
+
+For local `.env`:
+
+```bash
+GCP_PROJECT_ID="YOUR_GCP_PROJECT_ID"
+LLM_PROVIDER="vertex"
+GEMINI_API_KEY="optional-fallback-only"
+```
+
+Provider modes:
+
+```bash
+# Vertex-only (recommended default)
+LLM_PROVIDER="vertex"
+
+# Gemini API key only
+LLM_PROVIDER="gemini"
+
+# Vertex first, then Gemini fallback
+LLM_PROVIDER="auto"
+```
+
+Image model quality/cost tuning:
+
+```bash
+# Recommended default (newer and lower-cost)
+IMAGE_MODEL="imagen-4.0-fast-generate-001"
+
+# Higher quality but higher cost
+IMAGE_MODEL="imagen-4.0-generate-001"
+
+# Legacy compatibility fallback
+IMAGE_MODEL="imagen-3.0-generate-001"
+```
+
+GitMesh will automatically fall back through supported image model IDs if the preferred one is unavailable in your region/project.
+
+For CI/Modal secrets, prefer Vertex credentials and keep `GEMINI_API_KEY` unset unless you intentionally want fallback behavior.
 
 To spin up and simulate the local pipeline dry-run, tool-belt synthesis, and mock agent cycle:
 
@@ -86,6 +218,15 @@ export GITLAB_PRIVATE_TOKEN="your-gitlab-token"
 
 # Run the central orchestrator
 python3 agent.py
+```
+
+Optional environment variables for webhook/trigger components:
+
+```bash
+export GITLAB_PROJECT_ID="your-gitlab-project-id"
+export GITLAB_TRIGGER_TOKEN="your-gitlab-pipeline-trigger-token"
+export GITLAB_TRIGGER_REF="main"
+export GITLAB_WEBHOOK_SECRET="your-gitlab-webhook-secret"
 ```
 
 ---

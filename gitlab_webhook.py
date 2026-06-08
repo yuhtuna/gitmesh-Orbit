@@ -1,10 +1,14 @@
+import os
+
 import modal
-from fastapi import Request
+from fastapi import HTTPException, Request
 
 app = modal.App("gitmesh-webhook")
 
-GITLAB_PROJECT_ID = "82717291"
-GITLAB_TRIGGER_TOKEN = "glptt-F9ycN4syYk_UAhK3NnoM"
+GITLAB_PROJECT_ID = os.environ.get("GITLAB_PROJECT_ID", "")
+GITLAB_TRIGGER_TOKEN = os.environ.get("GITLAB_TRIGGER_TOKEN", "")
+GITLAB_TRIGGER_REF = os.environ.get("GITLAB_TRIGGER_REF", "main")
+GITLAB_WEBHOOK_SECRET = os.environ.get("GITLAB_WEBHOOK_SECRET", "")
 
 webhook_image = modal.Image.debian_slim().pip_install("fastapi[standard]")
 
@@ -17,6 +21,17 @@ async def gitlab_issue_listener(req: Request):
     """
     import urllib.request
     import urllib.parse
+
+    if GITLAB_WEBHOOK_SECRET:
+        inbound_token = req.headers.get("x-gitlab-token", "")
+        if inbound_token != GITLAB_WEBHOOK_SECRET:
+            raise HTTPException(status_code=401, detail="Invalid webhook token")
+
+    if not GITLAB_PROJECT_ID or not GITLAB_TRIGGER_TOKEN:
+        raise HTTPException(
+            status_code=500,
+            detail="Missing required env vars: GITLAB_PROJECT_ID and/or GITLAB_TRIGGER_TOKEN"
+        )
     
     body = await req.json()
     
@@ -36,9 +51,7 @@ async def gitlab_issue_listener(req: Request):
         prompt = issue_title.split(":", 1)[1].strip()
         print(f"Triggering 3D Pipeline for prompt: {prompt}")
 
-        # 'ref' is simply the branch name you want the pipeline to run on.
-        # We will use 'main'. If your default branch is 'master', change this to 'master'.
-        ref = "main"
+        ref = GITLAB_TRIGGER_REF
 
         url = f"https://gitlab.com/api/v4/projects/{GITLAB_PROJECT_ID}/trigger/pipeline"
         form_data = urllib.parse.urlencode({

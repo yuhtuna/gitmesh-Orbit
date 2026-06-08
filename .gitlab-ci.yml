@@ -2,6 +2,7 @@ stages:
   - generate_3d
 
 variables:
+  LLM_PROVIDER: "vertex"
   ISSUE_TITLE: "Fallback Prompt"
   ISSUE_DESC: ""
   ISSUE_IID: ""
@@ -18,6 +19,32 @@ run_gitmesh_pipeline:
     - curl -Iv https://api.modal.com || true
   script: |
     set -e
+    require_var() {
+      var_name="$1"
+      eval "var_value=\${$var_name:-}"
+      if [ -z "$var_value" ]; then
+        echo "Missing required CI/CD variable: $var_name"
+        exit 1
+      fi
+    }
+
+    echo "Running GitMesh remote preflight checks..."
+    require_var GITLAB_API_TOKEN
+    require_var MODAL_TOKEN_ID
+    require_var MODAL_TOKEN_SECRET
+    require_var ISSUE_IID
+    require_var ISSUE_TITLE
+
+    if [ "${LLM_PROVIDER}" != "vertex" ]; then
+      echo "LLM_PROVIDER must be 'vertex' for remote GitLab production runs. Current value: ${LLM_PROVIDER}"
+      exit 1
+    fi
+
+    if [ -n "${GEMINI_API_KEY:-}" ]; then
+      echo "GEMINI_API_KEY must not be set in remote GitLab production. Use Vertex credentials in Modal secret gitmesh-keys."
+      exit 1
+    fi
+
     echo "============================================="
     echo " GitMesh v1.4 - 10-Stage AI Asset Pipeline"
     echo " Triggered by Issue #${ISSUE_IID}"
@@ -25,24 +52,30 @@ run_gitmesh_pipeline:
     echo "============================================="
     curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🚀 GitMesh Pipeline Started! Asset: ${ISSUE_TITLE} (Issue #${ISSUE_IID}, 10 stages)" "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
     pip install modal
+    if ! modal secret list | grep -q "gitmesh-keys"; then
+      echo "Modal secret 'gitmesh-keys' was not found. Create it with GCP_PROJECT_ID, GCP_SERVICE_ACCOUNT_JSON, LLM_PROVIDER=vertex, and IMAGE_MODEL."
+      curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=❌ GitMesh preflight failed: Modal secret gitmesh-keys was not found. Configure remote Vertex credentials before retrying." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
+      exit 1
+    fi
+    curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=✅ GitMesh remote preflight passed: GitLab CI variables and Modal secret are configured for Vertex." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
     curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🧠 Stage 1: Gemini Brain - Analyzing prompt and planning pipeline..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
     curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=📷 Stage 2: Reference Image - Generating via Imagen..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
     modal run modal_app.py::generate_reference_image --prompt "${ISSUE_TITLE}" --issue-desc "${ISSUE_DESC}" --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
     curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🧊 Stage 3: Mesh Generation - Offloading to Modal GPU (L4)..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
     modal run modal_app.py::generate_3d_mesh --prompt "${ISSUE_TITLE}" --issue-desc "${ISSUE_DESC}" --style "lowpoly" --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
     curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🔍 Stage 3b: GLB Validation - Checking mesh integrity..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
-    modal run modal_app.py::validate_glb --glb-path "trellis_mesh_a_gold_treasure_chest_lowpoly.glb" --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
+    modal run modal_app.py::validate_glb --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
     curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=✂️ Stage 4: Segmentation - Running P3-SAM on GPU..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
-    modal run modal_app.py::segment_mesh --glb-url "placeholder" --prompt-tags "base,lid,handle,latch" --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
+    modal run modal_app.py::segment_mesh --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
     curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🔧 Stages 5-6: Blender - Cleaning edges and rendering parts..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
     curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🏷️ Stage 7: Part Labeling - Classifying with Gemini Flash Lite..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
-    modal run modal_app.py::label_parts --parts-json '{"part_0":"base","part_1":"lid","part_2":"handle","part_3":"latch"}' --asset-name "${ISSUE_TITLE}" --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
+    modal run modal_app.py::label_parts --asset-name "${ISSUE_TITLE}" --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
     curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🎬 Stage 8: Animation Planning - Gemini Flash generating motion plan..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
-    modal run modal_app.py::generate_animation_plan --labels-json '{"part_0":"base","part_1":"lid","part_2":"handle","part_3":"latch"}' --asset-name "${ISSUE_TITLE}" --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
+    modal run modal_app.py::generate_animation_plan --asset-name "${ISSUE_TITLE}" --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
     curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=✅ Stage 9: Validation - Running geometric checks..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
-    modal run modal_app.py::validate_animation_plan --plan-json '{"steps":[]}' --labels-json '{}' --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
+    modal run modal_app.py::validate_animation_plan --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
     curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🎬 Stage 10: Final Export - Blender headless rendering..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
-    modal run modal_app.py::animate_and_render_mesh --glb-url "placeholder" --animation-plan-json '{"rotation_y":360,"frames":24}' --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
+    modal run modal_app.py::animate_and_render_mesh --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
     echo "============================================="
     echo " Pipeline Complete! Closing issue #${ISSUE_IID}"
     echo "============================================="

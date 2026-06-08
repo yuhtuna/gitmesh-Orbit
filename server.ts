@@ -5,12 +5,26 @@ import fs from "fs/promises";
 import { spawn } from "child_process";
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT || 3000);
+const WEBHOOK_SECRET = process.env.GITLAB_WEBHOOK_SECRET || "";
+
+function resolvePythonCommand(): string {
+  return process.platform === "win32" ? "python" : "python3";
+}
 
 app.use(express.json());
 
 // Webhook listener for GitLab issues
 app.post("/webhook", (req, res) => {
+  if (WEBHOOK_SECRET) {
+    const inboundToken = (req.get("x-gitlab-token") || "").trim();
+    if (inboundToken !== WEBHOOK_SECRET) {
+      console.warn("[Webhook] Rejected request due to invalid token.");
+      res.status(401).send("Unauthorized");
+      return;
+    }
+  }
+
   // Immediately return 200 OK so the webhook doesn't time out
   res.status(200).send("OK");
   
@@ -25,7 +39,7 @@ app.post("/webhook", (req, res) => {
   }
 
   console.log("[Webhook] Triggering agent.py for issue payload...");
-  const pythonCommand = process.platform === "win32" ? "python" : "python3";
+  const pythonCommand = resolvePythonCommand();
   const pythonProc = spawn(pythonCommand, ["agent.py", issueText], {
     env: {
       ...process.env,
@@ -398,7 +412,7 @@ app.get("/", async (req, res) => {
 app.post("/api/run-headless-agent", (req, res) => {
   res.setHeader("Content-Type", "text/plain");
 
-  const pythonProc = spawn("python3", ["agent.py"], {
+  const pythonProc = spawn(resolvePythonCommand(), ["agent.py"], {
     env: {
       ...process.env,
       PYTHONUNBUFFERED: "1",

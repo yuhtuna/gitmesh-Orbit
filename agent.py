@@ -25,6 +25,7 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger("GitMeshHeadlessAgent")
+ADK_MODEL = "gemini-3.5-flash"
 
 # =====================================================================
 # Google Agent Development Kit (ADK) SDK Imports & Fallbacks
@@ -237,8 +238,12 @@ async def connect_gitlab_mcp() -> Optional[Any]:
         return None
 
     # Retrieve environment variables for auth config
-    private_token = os.getenv("GITLAB_PRIVATE_TOKEN", "MOCK_DEVELOPTION_TOKEN")
+    private_token = os.getenv("GITLAB_PRIVATE_TOKEN")
     api_url = os.getenv("GITLAB_API_URL", "https://gitlab.com")
+
+    if not private_token:
+        logger.warning("⚠️ GITLAB_PRIVATE_TOKEN missing. Skipping live GitLab MCP connection.")
+        return None
 
     # Parameters to spawn GitLab MCP server via npx subprocess
     server_params = StdioServerParameters(
@@ -272,7 +277,7 @@ async def main():
     gemini_key = os.getenv("GEMINI_API_KEY")
 
     if not gitlab_token:
-        logger.warning("💡 GITLAB_PRIVATE_TOKEN not found in environment. Defaulting to mock token for dry-run.")
+        logger.warning("💡 GITLAB_PRIVATE_TOKEN not found in environment. Running without live GitLab MCP tools.")
     if not gemini_key:
         logger.warning("💡 GEMINI_API_KEY not found in environment. Vertex/Gemini requests will run mock fallback.")
 
@@ -311,7 +316,7 @@ async def main():
 
 async def initialize_adk_agent_and_test(mcp_tools: List[Any]):
     """
-    Initializes the Google ADK Agent using gemini-3.1-flash, combining
+    Initializes the Google ADK Agent using the configured ADK model, combining
     the wrapped serverless Modal tech-art tools and dynamic tools retrieved from GitLab MCP.
     """
     logger.info("🛠️ Building combined workflow toolbelt with injected Modal tools...")
@@ -338,11 +343,11 @@ async def initialize_adk_agent_and_test(mcp_tools: List[Any]):
         "Step 10: Post a final conclusive comment on the MR confirming delivery containing references/links (e.g., Markdown video pointers) to the compiled assets, and update the MR status/metadata to transition the MR state into 'ready for review' to complete your operational cycle."
     )
 
-    logger.info("🧠 Instantiating Google ADK Agent (Model: gemini-3.1-flash)...")
+    logger.info(f"🧠 Instantiating Google ADK Agent (Model: {ADK_MODEL})...")
     try:
         # Initialize Google ADK Agent with combined workspace capabilities
         agent = Agent(
-            model="gemini-3.5-flash",
+            model=ADK_MODEL,
             system_instruction=system_instruction,
             tools=combined_tools
         )
