@@ -5,13 +5,6 @@ from fastapi import HTTPException, Request
 
 app = modal.App("gitmesh-webhook")
 
-# Engine project: owns the .gitlab-ci.yml pipeline and the trigger token.
-GITLAB_PROJECT_ID = os.environ.get("GITLAB_PROJECT_ID", "")
-GITLAB_URL = os.environ.get("GITLAB_URL", "https://gitlab.com").rstrip("/")
-GITLAB_TRIGGER_TOKEN = os.environ.get("GITLAB_TRIGGER_TOKEN", "")
-GITLAB_TRIGGER_REF = os.environ.get("GITLAB_TRIGGER_REF", "main")
-GITLAB_WEBHOOK_SECRET = os.environ.get("GITLAB_WEBHOOK_SECRET", "")
-
 REGISTRY_DICT_NAME = "gitmesh-project-registry"
 
 webhook_image = modal.Image.debian_slim().pip_install("fastapi[standard]")
@@ -29,7 +22,10 @@ def _lookup_registry(project_id: str) -> dict:
         return {}
 
 
-@app.function(image=webhook_image)
+@app.function(
+    image=webhook_image,
+    secrets=[modal.Secret.from_name("gitmesh-keys")]
+)
 @modal.fastapi_endpoint(method="POST")
 async def gitlab_issue_listener(req: Request):
     """
@@ -47,10 +43,17 @@ async def gitlab_issue_listener(req: Request):
     import urllib.request
     import urllib.parse
 
-    if not GITLAB_PROJECT_ID or not GITLAB_TRIGGER_TOKEN:
+    # Engine project: owns the .gitlab-ci.yml pipeline and the trigger token.
+    gitlab_project_id = os.environ.get("GITLAB_PROJECT_ID", "")
+    gitlab_url = os.environ.get("GITLAB_URL", "https://gitlab.com").rstrip("/")
+    gitlab_trigger_token = os.environ.get("GITLAB_TRIGGER_TOKEN", "")
+    gitlab_trigger_ref = os.environ.get("GITLAB_TRIGGER_REF", "main")
+    gitlab_webhook_secret = os.environ.get("GITLAB_WEBHOOK_SECRET", "")
+
+    if not gitlab_project_id or not gitlab_trigger_token:
         raise HTTPException(
             status_code=500,
-            detail="Missing required env vars: GITLAB_PROJECT_ID and/or GITLAB_TRIGGER_TOKEN"
+            detail=f"Missing required env vars: GITLAB_PROJECT_ID and/or GITLAB_TRIGGER_TOKEN (Found: {bool(gitlab_project_id)}, {bool(gitlab_trigger_token)})"
         )
 
     body = await req.json()
