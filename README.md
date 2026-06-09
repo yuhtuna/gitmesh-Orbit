@@ -160,6 +160,7 @@ When to use:
 
 1. `bootstrap_modal_remote` (manual)
    - Bootstraps Modal and webhook from GitLab runner context
+   - Hidden by default; set `RUN_BOOTSTRAP=true` in the pipeline run to expose it
 2. `run_gitmesh_pipeline` (triggered)
    - Runs staged compute pipeline
    - Runs ADK-first when `USE_ADK_ORCHESTRATOR=true`

@@ -3,6 +3,7 @@ stages:
   - generate_3d
 
 variables:
+  RUN_BOOTSTRAP: "false"
   LLM_PROVIDER: "vertex"
   USE_ADK_ORCHESTRATOR: "true"
   ADK_HARD_FAIL: "false"
@@ -76,10 +77,11 @@ bootstrap_modal_remote:
     fi
 
     echo "Modal bootstrap completed from GitLab runner."
-  when: manual
+  rules:
+    - if: '$RUN_BOOTSTRAP == "true" && $CI_COMMIT_BRANCH'
+      when: manual
+    - when: never
   allow_failure: false
-  only:
-    - branches
 
 run_gitmesh_pipeline:
   stage: generate_3d
