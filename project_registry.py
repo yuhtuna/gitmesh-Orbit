@@ -1,5 +1,9 @@
 """GitMesh multi-project registry.
 
+EXPERIMENTAL / NIGHTLY — under development, NOT production-tested. This module
+backs the opt-in cross-project onboarding feature. It is dormant unless a
+project is explicitly registered; the main single-project flow does not use it.
+
 Stores per-target-project onboarding configuration in a Modal Dict so the
 central webhook and compute stages can route GitLab comments, uploads, and
 pipeline triggers to the correct external project.

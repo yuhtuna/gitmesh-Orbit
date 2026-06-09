@@ -254,6 +254,25 @@ See `ADK_MIGRATION_TRACKER.md` for:
 3. Cutover phases and rollback strategy
 
 
+## Experimental Features (Nightly / Under Development)
+
+The following is opt-in, dormant by default, and NOT production-tested. It does
+not affect the standard single-project workflow above.
+
+### Multi-Project Onboarding (experimental)
+
+Connect additional GitLab projects to one deployed GitMesh engine without
+cloning this repo per project. Routing only activates when a project is
+explicitly registered; all lookups fail safe to the single-project path.
+
+- Onboarding wrapper: `onboard_project.ps1`
+- Registry backend: `project_registry.py`
+- Design notes: `MULTI_PROJECT_ONBOARDING_PLAN.md`
+
+Do not rely on this for production until it is validated end-to-end against a
+second live GitLab project.
+
+
 ## Scope
 
 This README intentionally focuses on remote GitLab production operation.

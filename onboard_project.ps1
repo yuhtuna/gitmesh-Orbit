@@ -2,6 +2,10 @@
 .SYNOPSIS
     Onboard an external GitLab project to a deployed GitMesh engine (multi-project).
 
+    EXPERIMENTAL / NIGHTLY — under development, NOT production-tested. Use only
+    for trying out cross-project onboarding. The main single-project workflow
+    does not depend on this script.
+
 .DESCRIPTION
     Self-serve onboarding: point any GitLab project at an already-deployed GitMesh
     engine WITHOUT cloning this repo per project. This script:
