@@ -104,6 +104,16 @@ run_gitmesh_pipeline:
     require_var ISSUE_IID
     require_var ISSUE_TITLE
 
+    # Multi-project routing: when triggered on behalf of an onboarded target
+    # project, route GitLab API calls (progress comments, auto-close) to that
+    # project. The compute stages additionally resolve the target's API token
+    # from the registry at runtime. Defaults to the engine project otherwise.
+    if [ -n "${TARGET_PROJECT_ID:-}" ]; then
+      TARGET_BASE="${TARGET_GITLAB_URL:-https://gitlab.com}"
+      GITLAB_API_URL="${TARGET_BASE%/}/api/v4/projects/${TARGET_PROJECT_ID}"
+      echo "Multi-project run: routing GitLab API to ${GITLAB_API_URL}"
+    fi
+
     if [ "${PIPELINE_DRY_RUN:-false}" != "true" ]; then
       require_var MODAL_TOKEN_ID
       require_var MODAL_TOKEN_SECRET

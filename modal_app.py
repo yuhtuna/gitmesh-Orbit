@@ -137,26 +137,68 @@ def _get_vertex_credentials() -> Optional[Any]:
 GITLAB_PROJECT_ID = os.environ.get("GITLAB_PROJECT_ID", "").strip()
 GITLAB_URL = os.environ.get("GITLAB_URL", "https://gitlab.com").strip().rstrip("/")
 
+# Multi-project routing: when the webhook triggers on behalf of an onboarded
+# project, it sets TARGET_PROJECT_ID / TARGET_GITLAB_URL so comments and uploads
+# go back to the originating project instead of the engine project.
+TARGET_PROJECT_ID = os.environ.get("TARGET_PROJECT_ID", "").strip()
+TARGET_GITLAB_URL = os.environ.get("TARGET_GITLAB_URL", "").strip().rstrip("/")
+REGISTRY_DICT_NAME = "gitmesh-project-registry"
+
+
+def _registry_lookup(project_id: str) -> dict:
+    """Return the onboarding record for a project from the Modal registry Dict."""
+    if not project_id:
+        return {}
+    try:
+        import modal
+        registry = modal.Dict.from_name(REGISTRY_DICT_NAME, create_if_missing=True)
+        return registry.get(str(project_id)) or {}
+    except Exception as e:
+        print(f"[Registry] lookup failed for project {project_id}: {e}")
+        return {}
+
+
+def _resolve_gitlab_target(passed_token: str):
+    """Resolve (base_url, project_id, token) for GitLab API calls.
+
+    Prefers the routed target project (multi-project mode), falling back to the
+    engine-level env config (single-project mode). The token comes from the
+    registry for onboarded target projects, else from the passed-in token.
+    """
+    target_id = TARGET_PROJECT_ID or GITLAB_PROJECT_ID
+    base_url = TARGET_GITLAB_URL or GITLAB_URL
+    token = passed_token
+
+    if TARGET_PROJECT_ID and TARGET_PROJECT_ID != GITLAB_PROJECT_ID:
+        record = _registry_lookup(TARGET_PROJECT_ID)
+        if record:
+            base_url = (record.get("gitlab_url") or base_url).rstrip("/")
+            if record.get("api_token"):
+                token = record["api_token"]
+
+    return base_url, (target_id.strip() if target_id else None), token
+
 
 def _get_gitlab_project_id() -> Optional[str]:
-    project_id = GITLAB_PROJECT_ID.strip()
+    project_id = (TARGET_PROJECT_ID or GITLAB_PROJECT_ID).strip()
     if not project_id:
-        print("[GitLab] GITLAB_PROJECT_ID is not set; skipping GitLab API integration.")
+        print("[GitLab] No target/engine project id set; skipping GitLab API integration.")
         return None
     return project_id
 
 def _post_gitlab_comment(issue_iid: str, gitlab_token: str, body: str) -> bool:
     """Post a markdown comment on a GitLab issue. Returns True on success."""
-    if not issue_iid or not gitlab_token:
-        print("[GitLab] Skipping comment — missing issue_iid or gitlab_token")
+    if not issue_iid:
+        print("[GitLab] Skipping comment — missing issue_iid")
         return False
-    project_id = _get_gitlab_project_id()
-    if not project_id:
+    base_url, project_id, token = _resolve_gitlab_target(gitlab_token)
+    if not project_id or not token:
+        print("[GitLab] Skipping comment — missing project id or token")
         return False
     try:
         import requests
-        url = f"{GITLAB_URL}/api/v4/projects/{project_id}/issues/{issue_iid}/notes"
-        r = requests.post(url, headers={"PRIVATE-TOKEN": gitlab_token}, data={"body": body})
+        url = f"{base_url}/api/v4/projects/{project_id}/issues/{issue_iid}/notes"
+        r = requests.post(url, headers={"PRIVATE-TOKEN": token}, data={"body": body})
         ok = r.ok
         print(f"[GitLab] Comment posted ({r.status_code}): {body[:80]}...")
         return ok
@@ -167,15 +209,15 @@ def _post_gitlab_comment(issue_iid: str, gitlab_token: str, body: str) -> bool:
 
 def _upload_to_gitlab(file_path: str, issue_iid: str, gitlab_token: str) -> Optional[str]:
     """Upload a file to GitLab and return its public URL, or None on failure."""
-    if not issue_iid or not gitlab_token:
+    if not issue_iid:
         return None
-    project_id = _get_gitlab_project_id()
-    if not project_id:
+    base_url, project_id, token = _resolve_gitlab_target(gitlab_token)
+    if not project_id or not token:
         return None
     try:
         import requests
-        url = f"{GITLAB_URL}/api/v4/projects/{project_id}/uploads"
-        headers = {"PRIVATE-TOKEN": gitlab_token}
+        url = f"{base_url}/api/v4/projects/{project_id}/uploads"
+        headers = {"PRIVATE-TOKEN": token}
         with open(file_path, "rb") as fh:
             files = {"file": (os.path.basename(file_path), fh)}
             r = requests.post(url, headers=headers, files=files)
@@ -185,7 +227,7 @@ def _upload_to_gitlab(file_path: str, issue_iid: str, gitlab_token: str) -> Opti
             # Use full_path for a working absolute URL
             full_path = data.get("full_path", data.get("url", ""))
             if full_path.startswith("/"):
-                return f"{GITLAB_URL}{full_path}"
+                return f"{base_url}{full_path}"
             return full_path
         print(f"[GitLab] Upload failed ({r.status_code}): {r.text}")
     except Exception as e:
@@ -2939,9 +2981,16 @@ except Exception as e:
             animation_success = True
             print(f"✅ Trimesh animation exported to {glb_out_path}")
 
-            with open(mp4_out_path, "wb") as f:
-                f.write(b"\x00\x00\x00\x1cftypmp42")  # minimal MP4 header
-            print(f"📹 MP4 placeholder created at {mp4_out_path}")
+            if _render_turntable_mp4(mesh, mp4_out_path, frames=frames, rotation_y=rotation_y):
+                print(f"📹 Turntable preview MP4 rendered at {mp4_out_path}")
+            else:
+                # Do not write a fake/broken stub; remove any partial file instead.
+                if os.path.exists(mp4_out_path):
+                    try:
+                        os.remove(mp4_out_path)
+                    except OSError:
+                        pass
+                print("⚠️ Preview MP4 unavailable for this run (Trimesh fallback).")
 
         except Exception as e:
             print(f"⚠️ Trimesh fallback animation failed: {e}")
@@ -2971,6 +3020,85 @@ except Exception as e:
         "file_size_kb": file_size_kb,
         "render_engine": "Blender" if animation_success else "Trimesh Fallback"
     }
+
+
+def _render_turntable_mp4(mesh, mp4_out_path: str, frames: int = 24,
+                          rotation_y: float = 360.0, resolution: int = 512,
+                          fps: int = 24) -> bool:
+    """Render a real, playable turntable preview MP4 from a trimesh mesh.
+
+    Uses a lightweight headless software rasterizer (numpy + OpenCV) and encodes
+    with imageio/ffmpeg. Returns True only if a valid video file was written.
+    """
+    try:
+        import numpy as np
+        import cv2
+        import imageio.v2 as imageio
+
+        verts = np.asarray(mesh.vertices, dtype=np.float64)
+        faces = np.asarray(mesh.faces, dtype=np.int64)
+        if verts.size == 0 or faces.size == 0:
+            print("⚠️ Turntable render skipped: mesh has no geometry.")
+            return False
+
+        # Center and normalize to a unit bounding sphere so framing is consistent.
+        verts = verts - verts.mean(axis=0)
+        radius = float(np.linalg.norm(verts, axis=1).max())
+        if radius <= 0:
+            return False
+        verts = verts / radius
+
+        light_dir = np.array([0.3, 0.4, 1.0])
+        light_dir /= np.linalg.norm(light_dir)
+        base_color = np.array([200, 170, 120], dtype=np.float64)
+
+        writer = imageio.get_writer(
+            mp4_out_path, fps=fps, codec="libx264",
+            quality=8, macro_block_size=None
+        )
+        try:
+            for i in range(frames):
+                angle = math.radians((i / max(frames, 1)) * rotation_y)
+                c, s = math.cos(angle), math.sin(angle)
+                rot = np.array([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]])
+                rv = verts @ rot.T
+
+                margin = 0.85
+                px = ((rv[:, 0] * margin) * 0.5 + 0.5) * (resolution - 1)
+                py = (0.5 - (rv[:, 1] * margin) * 0.5) * (resolution - 1)
+                pts2d = np.stack([px, py], axis=1)
+
+                tri = rv[faces]
+                v0, v1, v2 = tri[:, 0], tri[:, 1], tri[:, 2]
+                normals = np.cross(v1 - v0, v2 - v0)
+                nlen = np.linalg.norm(normals, axis=1)
+                nlen[nlen == 0] = 1.0
+                normals = normals / nlen[:, None]
+                shade = np.clip((normals @ light_dir) * 0.5 + 0.5, 0.15, 1.0)
+
+                face_depth = rv[:, 2][faces].mean(axis=1)
+                order = np.argsort(face_depth)  # painter's algorithm: far to near
+
+                img = np.full((resolution, resolution, 3), 24, dtype=np.uint8)
+                for fi in order:
+                    poly = pts2d[faces[fi]].astype(np.int32)
+                    col = (base_color * shade[fi]).astype(np.uint8)
+                    cv2.fillConvexPoly(
+                        img, poly,
+                        (int(col[0]), int(col[1]), int(col[2])),
+                        lineType=cv2.LINE_AA
+                    )
+                writer.append_data(img)
+        finally:
+            writer.close()
+
+        ok = os.path.exists(mp4_out_path) and os.path.getsize(mp4_out_path) > 1024
+        if not ok:
+            print("⚠️ Turntable render produced no usable MP4 output.")
+        return ok
+    except Exception as e:
+        print(f"⚠️ Turntable MP4 render failed: {e}")
+        return False
 
 
 def _create_procedural_chest_mesh():

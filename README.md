@@ -39,6 +39,12 @@ Core files for remote operation:
 5. Issue receives progress/status comments
 6. Final outputs are posted and issue may auto-close
 
+Current scope note:
+
+1. The current production flow is configured around one GitLab project at a time.
+2. Code changes must be committed and pushed to GitLab before a new pipeline run will use them.
+3. `setup_remote.ps1` is primarily for infrastructure wiring, not day-to-day code iteration.
+
 ## Configuration Reference
 
 ### A) Required `.env` Values (Operator Input)
@@ -118,6 +124,11 @@ Bootstrap responsibilities:
 5. Upsert GitLab CI/CD variables
 6. Create/update GitLab issue webhook
 
+Important operating rule:
+
+1. Normal code changes: edit locally, then commit and push, then trigger pipeline.
+2. Re-run `setup_remote.ps1` only when infra wiring changes: secrets, CI vars, webhook config, or deploy state.
+
 ### 4) Verify setup
 
 1. Confirm pipeline variables exist in GitLab project settings
@@ -154,6 +165,12 @@ When to use:
    - Runs ADK-first when `USE_ADK_ORCHESTRATOR=true`
    - Falls back to the direct Modal chain when `ADK_HARD_FAIL=false`
    - Supports `PIPELINE_DRY_RUN=true` for control-plane validation only
+
+Source of truth for a pipeline run:
+
+1. GitLab Runner checks out the repository at the pipeline commit SHA.
+2. The pipeline does not use uncommitted local workspace changes.
+3. If logic changed in `modal_app.py`, `agent.py`, or `.gitlab-ci.yml`, that code must be pushed before the next run.
 
 ## Operating the Pipeline
 
@@ -235,6 +252,7 @@ See `ADK_MIGRATION_TRACKER.md` for:
 1. Role-based logical agents
 2. Function mappings
 3. Cutover phases and rollback strategy
+
 
 ## Scope
 

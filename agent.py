@@ -39,32 +39,64 @@ def _env_value(name: str, required: bool = True, default: str = "") -> str:
     return value
 
 
+REGISTRY_DICT_NAME = "gitmesh-project-registry"
+
+
+def _registry_lookup(project_id: str) -> dict:
+    """Read a target project's onboarding record from the Modal registry Dict."""
+    if not project_id:
+        return {}
+    try:
+        import modal
+        registry = modal.Dict.from_name(REGISTRY_DICT_NAME, create_if_missing=True)
+        return registry.get(str(project_id)) or {}
+    except Exception as exc:
+        logger.info("Registry lookup failed for project %s: %s", project_id, exc)
+        return {}
+
+
 def _gitlab_api_url() -> str:
+    target_project_id = os.getenv("TARGET_PROJECT_ID", "").strip()
+    if target_project_id:
+        base = os.getenv("TARGET_GITLAB_URL", "").strip().rstrip("/") or "https://gitlab.com"
+        return f"{base}/api/v4/projects/{target_project_id}"
     return os.getenv("GITLAB_API_URL", "").strip() or f"https://gitlab.com/api/v4/projects/{_env_value('CI_PROJECT_ID')}"
 
 
+def _resolve_gitlab_token(passed_token: str) -> str:
+    """Return the API token for the routed target project, else the passed token."""
+    target_project_id = os.getenv("TARGET_PROJECT_ID", "").strip()
+    if target_project_id:
+        record = _registry_lookup(target_project_id)
+        if record.get("api_token"):
+            return record["api_token"]
+    return passed_token
+
+
 def _post_gitlab_issue_comment(issue_iid: str, gitlab_token: str, body: str) -> None:
-    if not issue_iid or not gitlab_token:
+    token = _resolve_gitlab_token(gitlab_token)
+    if not issue_iid or not token:
         logger.info("Skipping GitLab issue comment because issue IID or token is missing.")
         return
 
     url = f"{_gitlab_api_url()}/issues/{urllib.parse.quote(str(issue_iid), safe='')}/notes"
     data = urllib.parse.urlencode({"body": body}).encode("utf-8")
     request = urllib.request.Request(url, data=data, method="POST")
-    request.add_header("PRIVATE-TOKEN", gitlab_token)
+    request.add_header("PRIVATE-TOKEN", token)
     request.add_header("Content-Type", "application/x-www-form-urlencoded")
     with urllib.request.urlopen(request, timeout=60) as response:
         logger.info("GitLab comment posted with status %s", response.status)
 
 
 def _close_gitlab_issue(issue_iid: str, gitlab_token: str) -> None:
-    if not issue_iid or not gitlab_token:
+    token = _resolve_gitlab_token(gitlab_token)
+    if not issue_iid or not token:
         return
 
     url = f"{_gitlab_api_url()}/issues/{urllib.parse.quote(str(issue_iid), safe='')}"
     data = urllib.parse.urlencode({"state_event": "close"}).encode("utf-8")
     request = urllib.request.Request(url, data=data, method="PUT")
-    request.add_header("PRIVATE-TOKEN", gitlab_token)
+    request.add_header("PRIVATE-TOKEN", token)
     request.add_header("Content-Type", "application/x-www-form-urlencoded")
     with urllib.request.urlopen(request, timeout=60) as response:
         logger.info("GitLab issue close request returned status %s", response.status)
