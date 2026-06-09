@@ -60,10 +60,18 @@ async def gitlab_issue_listener(req: Request):
 
     # Resolve the source (target) project from the payload.
     source_project_id = str(body.get("project", {}).get("id", "") or "").strip()
-    record = _lookup_registry(source_project_id)
+    
+    # Lookup registry asynchronously
+    record = {}
+    if source_project_id:
+        try:
+            registry = modal.Dict.from_name(REGISTRY_DICT_NAME, create_if_missing=True)
+            record = await registry.get.aio(source_project_id) or {}
+        except Exception as e:
+            print(f"[Registry] lookup failed for project {source_project_id}: {e}")
 
     # Per-project webhook secret if onboarded, else engine-level default.
-    expected_secret = record.get("webhook_secret") or GITLAB_WEBHOOK_SECRET
+    expected_secret = record.get("webhook_secret") or gitlab_webhook_secret
     if expected_secret:
         inbound_token = req.headers.get("x-gitlab-token", "")
         if inbound_token != expected_secret:
@@ -85,14 +93,14 @@ async def gitlab_issue_listener(req: Request):
         prompt = issue_title.split(":", 1)[1].strip()
 
         # Target project metadata for routing comments/uploads back.
-        target_project_id = source_project_id or GITLAB_PROJECT_ID
-        target_gitlab_url = (record.get("gitlab_url") or GITLAB_URL).rstrip("/")
-        ref = record.get("trigger_ref") or GITLAB_TRIGGER_REF
+        target_project_id = source_project_id or gitlab_project_id
+        target_gitlab_url = (record.get("gitlab_url") or gitlab_url).rstrip("/")
+        ref = record.get("trigger_ref") or gitlab_trigger_ref
         print(f"Triggering 3D Pipeline for prompt: {prompt} (target project {target_project_id})")
 
-        url = f"{GITLAB_URL}/api/v4/projects/{GITLAB_PROJECT_ID}/trigger/pipeline"
+        url = f"{gitlab_url}/api/v4/projects/{gitlab_project_id}/trigger/pipeline"
         form_data = urllib.parse.urlencode({
-            "token": GITLAB_TRIGGER_TOKEN,
+            "token": gitlab_trigger_token,
             "ref": ref,
             "variables[ISSUE_TITLE]": prompt,
             "variables[ISSUE_DESC]": issue_desc,
