@@ -374,6 +374,16 @@ if (-not $SkipGitLabApi) {
     Set-GitLabVariable -BaseUrl $gitlabBaseUrl -ProjectId $config["GITLAB_PROJECT_ID"] -Headers $gitlabHeaders -Key "USE_ADK_ORCHESTRATOR" -Value $config["USE_ADK_ORCHESTRATOR"] -Masked $false -Protected $false
     Set-GitLabVariable -BaseUrl $gitlabBaseUrl -ProjectId $config["GITLAB_PROJECT_ID"] -Headers $gitlabHeaders -Key "ADK_HARD_FAIL" -Value $config["ADK_HARD_FAIL"] -Masked $false -Protected $false
     Set-GitLabVariable -BaseUrl $gitlabBaseUrl -ProjectId $config["GITLAB_PROJECT_ID"] -Headers $gitlabHeaders -Key "PIPELINE_DRY_RUN" -Value $config["PIPELINE_DRY_RUN"] -Masked $false -Protected $false
+    
+    # Sync GCP and Model variables to GitLab CI for the bootstrap/preflight stages
+    Set-GitLabVariable -BaseUrl $gitlabBaseUrl -ProjectId $config["GITLAB_PROJECT_ID"] -Headers $gitlabHeaders -Key "GCP_PROJECT_ID" -Value $config["GCP_PROJECT_ID"] -Masked $false -Protected $false
+    Set-GitLabVariable -BaseUrl $gitlabBaseUrl -ProjectId $config["GITLAB_PROJECT_ID"] -Headers $gitlabHeaders -Key "GCP_SERVICE_ACCOUNT_JSON" -Value $config["GCP_SERVICE_ACCOUNT_JSON"] -Masked $false -Protected $protectSensitive
+    
+    $imageModel = if ($config.ContainsKey("IMAGE_MODEL")) { $config["IMAGE_MODEL"] } else { "gemini-3.1-flash-image" }
+    $llmProvider = if ($config.ContainsKey("LLM_PROVIDER")) { $config["LLM_PROVIDER"] } else { "vertex" }
+    
+    Set-GitLabVariable -BaseUrl $gitlabBaseUrl -ProjectId $config["GITLAB_PROJECT_ID"] -Headers $gitlabHeaders -Key "IMAGE_MODEL" -Value $imageModel -Masked $false -Protected $false
+    Set-GitLabVariable -BaseUrl $gitlabBaseUrl -ProjectId $config["GITLAB_PROJECT_ID"] -Headers $gitlabHeaders -Key "LLM_PROVIDER" -Value $llmProvider -Masked $false -Protected $false
 
     if ([string]::IsNullOrWhiteSpace($resolvedWebhookUrl)) {
         throw "Could not determine webhook URL automatically. Re-run with -WebhookUrl https://<your-modal-webhook-url>."
