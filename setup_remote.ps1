@@ -271,7 +271,7 @@ if (-not $config.ContainsKey("LLM_PROVIDER") -or [string]::IsNullOrWhiteSpace($c
     $config["LLM_PROVIDER"] = "vertex"
 }
 if (-not $config.ContainsKey("IMAGE_MODEL") -or [string]::IsNullOrWhiteSpace($config["IMAGE_MODEL"])) {
-    $config["IMAGE_MODEL"] = "imagen-4.0-fast-generate-001"
+    $config["IMAGE_MODEL"] = "gemini-3.1-flash-image"
 }
 if (-not $config.ContainsKey("GITLAB_TRIGGER_REF") -or [string]::IsNullOrWhiteSpace($config["GITLAB_TRIGGER_REF"])) {
     $config["GITLAB_TRIGGER_REF"] = "main"

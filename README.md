@@ -83,6 +83,13 @@ ADK orchestration controls:
 3. `ADK_HARD_FAIL=true` makes the pipeline fail immediately if ADK fails
 4. `PIPELINE_DRY_RUN=false` is required for real product-quality runs
 
+Model defaults:
+
+1. Remote production uses Vertex AI through `LLM_PROVIDER=vertex`
+2. The ADK supervisor model is `gemini-3.5-flash` in `agent.py`
+3. Reference-image generation defaults to `IMAGE_MODEL=gemini-3.1-flash-image`
+4. Text planning/classification calls in `modal_app.py` use `gemini-3.5-flash` through Vertex first
+
 ## One-Time Setup
 
 ### 1) Cloud prerequisites
