@@ -129,7 +129,7 @@ GITLAB_URL=https://gitlab.com    # set this for self-managed GitLab
 WEBHOOK_URL=                     # override webhook URL if deploy output parsing fails
 GITLAB_TRIGGER_REF=main
 LLM_PROVIDER=vertex
-IMAGE_MODEL=imagen-4.0-fast-generate-001
+IMAGE_MODEL=gemini-3.1-flash-image
 ```
 
 4. Run the one-command bootstrap:
@@ -219,14 +219,13 @@ LLM_PROVIDER="auto"
 Image model quality/cost tuning:
 
 ```bash
-# Recommended default (newer and lower-cost)
+# Recommended default
+IMAGE_MODEL="gemini-3.1-flash-image"
+
+# Alternative Imagen and Gemini models
+IMAGE_MODEL="gemini-3.5-flash"
 IMAGE_MODEL="imagen-4.0-fast-generate-001"
-
-# Higher quality but higher cost
 IMAGE_MODEL="imagen-4.0-generate-001"
-
-# Legacy compatibility fallback
-IMAGE_MODEL="imagen-3.0-generate-001"
 ```
 
 GitMesh will automatically fall back through supported image model IDs if the preferred one is unavailable in your region/project.

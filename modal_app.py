@@ -92,9 +92,11 @@ def _get_image_model_candidates() -> list[str]:
     Returns preferred image generation model IDs from newest/cost-effective to legacy fallback.
     Override first choice with IMAGE_MODEL env var.
     """
-    preferred = os.environ.get("IMAGE_MODEL", "imagen-4.0-fast-generate-001").strip()
+    preferred = os.environ.get("IMAGE_MODEL", "gemini-3.1-flash-image").strip()
     candidates = [
         preferred,
+        "gemini-3.5-flash",
+        "imagen-4.0-fast-generate-001",
         "imagen-4.0-generate-001",
         "imagen-3.0-generate-002",
         "imagen-3.0-generate-001",
@@ -298,22 +300,20 @@ def _call_gemini_vertex(prompt: str, model_name: str) -> Optional[str]:
         return None
 
     try:
-        import vertexai
-        from vertexai.generative_models import GenerativeModel
+        from google import genai
         
         credentials = _get_vertex_credentials()
-        if credentials:
-            vertexai.init(
-                project=_require_gcp_project_id(),
-                location=VERTEX_LOCATION,
-                credentials=credentials
-            )
-        else:
-            # Fall back to Application Default Credentials (works locally with `gcloud auth login`)
-            vertexai.init(project=_require_gcp_project_id(), location=VERTEX_LOCATION)
+        client = genai.Client(
+            vertexai=True,
+            project=_require_gcp_project_id(),
+            location=VERTEX_LOCATION,
+            http_options={"credentials": credentials} if credentials else None
+        )
         
-        model = GenerativeModel(model_name)
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model=model_name,
+            contents=prompt
+        )
         return response.text
     except Exception as e:
         print(f"⚠️ Vertex AI call failed: {e}")
@@ -329,11 +329,13 @@ def _call_gemini_api(prompt: str, model_name: str, gemini_api_key: Optional[str]
         return None
 
     try:
-        import google.generativeai as genai
+        from google import genai
 
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name)
-        response = model.generate_content(prompt)
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model=model_name,
+            contents=prompt
+        )
         return response.text.strip()
     except Exception as e:
         print(f"⚠️ Gemini API call failed: {e}")
@@ -415,41 +417,58 @@ def _predict_slicing_plan_with_gemini(asset_name: str, bounds_info: str = "", ge
 
 
 def _generate_imagen_vertex(prompt: str) -> Optional[bytes]:
-    """Generates an image using Vertex AI Imagen 3 API."""
+    """Generates an image using Vertex AI (unified google-genai SDK)."""
     import os
 
     if not _vertex_allowed():
         return None
 
     try:
-        import vertexai
-        from vertexai.preview.vision_models import ImageGenerationModel
-        
+        from google import genai
+        from google.genai import types
+
         credentials = _get_vertex_credentials()
-        if credentials:
-            vertexai.init(
-                project=_require_gcp_project_id(),
-                location=VERTEX_LOCATION,
-                credentials=credentials
-            )
-        else:
-            vertexai.init(project=_require_gcp_project_id(), location=VERTEX_LOCATION)
+        # The unified google-genai SDK for Vertex AI can use these credentials.
+        client = genai.Client(
+            vertexai=True,
+            project=_require_gcp_project_id(),
+            location=VERTEX_LOCATION,
+            http_options={"credentials": credentials} if credentials else None
+        )
             
         for model_id in _get_image_model_candidates():
             try:
                 print(f"🖼️ Attempting Vertex image model: {model_id}")
-                model = ImageGenerationModel.from_pretrained(model_id)
-                images = model.generate_images(
-                    prompt=prompt,
-                    number_of_images=1,
-                    language="en",
-                    aspect_ratio="1:1"
-                )
-                if images:
-                    print(f"✅ Vertex image model succeeded: {model_id}")
-                    return images[0]._image_bytes
+                if "gemini" in model_id.lower():
+                    # Use generate_content with Modality.IMAGE for Gemini models
+                    response = client.models.generate_content(
+                        model=model_id,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            response_modalities=[types.Modality.IMAGE],
+                        )
+                    )
+                    for part in response.candidates[0].content.parts:
+                        if part.inline_data:
+                            print(f"✅ Vertex image model (Gemini) succeeded: {model_id}")
+                            return part.inline_data.data
+                else:
+                    # Use generate_images for Imagen models
+                    result = client.models.generate_images(
+                        model=model_id,
+                        prompt=prompt,
+                        config=types.GenerateImagesConfig(
+                            number_of_images=1,
+                            aspect_ratio="1:1"
+                        )
+                    )
+                    if result.generated_images:
+                        print(f"✅ Vertex image model (Imagen) succeeded: {model_id}")
+                        return result.generated_images[0].image.image_bytes
             except Exception as inner_e:
                 print(f"⚠️ Vertex image model failed ({model_id}): {inner_e}")
+    except ImportError:
+        print("⚠️ google-genai package not found. Image generation via unified SDK requires it.")
     except Exception as e:
         print(f"⚠️ _generate_imagen_vertex failed: {e}")
     return None
@@ -465,22 +484,37 @@ def _generate_imagen_gemini_api(prompt: str, gemini_api_key: Optional[str] = Non
 
     try:
         from google import genai
+        from google.genai import types
 
         client = genai.Client(api_key=api_key)
         for model_id in _get_image_model_candidates():
             try:
                 print(f"🖼️ Attempting Gemini API image model: {model_id}")
-                result = client.models.generate_images(
-                    model=model_id,
-                    prompt=prompt,
-                    config=dict(
-                        number_of_images=1,
-                        aspect_ratio="1:1"
+                if "gemini" in model_id.lower():
+                    # Use generate_content with Modality.IMAGE for Gemini models
+                    response = client.models.generate_content(
+                        model=model_id,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            response_modalities=[types.Modality.IMAGE],
+                        )
                     )
-                )
-                if result.generated_images:
-                    print(f"✅ Gemini API image model succeeded: {model_id}")
-                    return result.generated_images[0].image.image_bytes
+                    for part in response.candidates[0].content.parts:
+                        if part.inline_data:
+                            print(f"✅ Gemini API image model (Gemini) succeeded: {model_id}")
+                            return part.inline_data.data
+                else:
+                    result = client.models.generate_images(
+                        model=model_id,
+                        prompt=prompt,
+                        config=types.GenerateImagesConfig(
+                            number_of_images=1,
+                            aspect_ratio="1:1"
+                        )
+                    )
+                    if result.generated_images:
+                        print(f"✅ Gemini API image model succeeded: {model_id}")
+                        return result.generated_images[0].image.image_bytes
             except Exception as inner_e:
                 print(f"⚠️ Gemini API image model failed ({model_id}): {inner_e}")
     except ImportError:
@@ -1388,7 +1422,7 @@ def generate_reference_image(prompt: str, issue_desc: str = "", issue_iid: str =
         base = f"Title: {prompt}\nDescription: {issue_desc}" if issue_desc else prompt
         ai_instruction = (
             f"You are an expert game 3D technical artist. The user wants to generate a 3D asset: '{base}'. "
-            "Rewrite this into a single, highly descriptive physical prompt optimized for image generation (Imagen). "
+            "Rewrite this into a single, highly descriptive physical prompt optimized for image generation. "
             "IMPORTANT: The object MUST have strict rectangular geometry with straight edges and sharp 90-degree corners. "
             "Do NOT generate arched, oval, or curved shapes. Keep the silhouette perfectly blocky and rectangular. "
             "Include visual materials, textures, geometry shapes, and lighting properties. Keep it under 2 sentences."
@@ -1396,7 +1430,7 @@ def generate_reference_image(prompt: str, issue_desc: str = "", issue_iid: str =
         res = _call_gemini_vertex(ai_instruction, "gemini-3.5-flash")
         if res:
             enhanced_prompt = res
-            print(f"✨ [Imagen Stage] [LLM:{llm_provider}] Vertex enhanced prompt: '{enhanced_prompt}'")
+            print(f"✨ [Image Gen Stage] [LLM:{llm_provider}] Vertex enhanced prompt: '{enhanced_prompt}'")
     except Exception as e:
         print(f"⚠️ Vertex AI bypass failed: {e}")
 
@@ -1405,7 +1439,7 @@ def generate_reference_image(prompt: str, issue_desc: str = "", issue_iid: str =
         base = f"Title: {prompt}\nDescription: {issue_desc}" if issue_desc else prompt
         ai_instruction = (
             f"You are an expert game 3D technical artist. The user wants to generate a 3D asset: '{base}'. "
-            "Rewrite this into a single, highly descriptive physical prompt optimized for image generation (Imagen). "
+            "Rewrite this into a single, highly descriptive physical prompt optimized for image generation. "
             "IMPORTANT: The object MUST have strict rectangular geometry with straight edges and sharp 90-degree corners. "
             "Do NOT generate arched, oval, or curved shapes. Keep the silhouette perfectly blocky and rectangular. "
             "Include visual materials, textures, geometry shapes, and lighting properties. Keep it under 2 sentences."
@@ -1413,12 +1447,12 @@ def generate_reference_image(prompt: str, issue_desc: str = "", issue_iid: str =
         fallback_prompt = _call_gemini_api(ai_instruction, "gemini-3.5-flash", gemini_api_key=gemini_api_key)
         if fallback_prompt:
             enhanced_prompt = fallback_prompt
-            print(f"✨ [Imagen Stage] [LLM:{llm_provider}] Gemini API enhanced prompt: '{enhanced_prompt}'")
+            print(f"✨ [Image Gen Stage] [LLM:{llm_provider}] Gemini API enhanced prompt: '{enhanced_prompt}'")
 
     # Try to generate real image via Vertex AI Imagen
     img_bytes = None
     try:
-        print(f"📷 [LLM:{llm_provider}] Attempting Vertex AI Imagen generation...")
+        print(f"📷 [LLM:{llm_provider}] Attempting Vertex AI image generation...")
         img_bytes = _generate_imagen_vertex(enhanced_prompt)
         if img_bytes:
             with open(ref_path, "wb") as f:
@@ -1429,7 +1463,7 @@ def generate_reference_image(prompt: str, issue_desc: str = "", issue_iid: str =
 
     # Fallback to standard Google AI API Key if Vertex AI didn't return an image
     if not img_bytes:
-        print(f"📷 [LLM:{llm_provider}] Attempting Gemini API Imagen fallback...")
+        print(f"📷 [LLM:{llm_provider}] Attempting Gemini API image fallback...")
         img_bytes = _generate_imagen_gemini_api(enhanced_prompt, gemini_api_key=gemini_api_key)
         if img_bytes:
             with open(ref_path, "wb") as f:
