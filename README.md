@@ -1,263 +1,261 @@
-# GitMesh 🚀 (Headless Autonomous 3D Technical Art Pipeline Agent)
+# GitMesh
 
-GitMesh is a fully headless, autonomous **CO-OP CI/CD agent** engineered to break the single greatest bottleneck in game development: manual 3D asset generation, mesh cleanup, semantic splitting, skeletal rigging, and visual turntable proofing. 
+GitMesh is a remote-first GitLab + Modal pipeline for automated 3D asset generation and animation delivery.
 
-By utilizing a ChatOps-driven workflow, **GitLab's Issue Board and Merge Requests (MRs)** serve as the entire user interface. Technical artists, game designers, and developers request assets inside standard tickets; GitMesh automatically intercepts, triggers massive high-performance remote GPU pipelines, and commits rigged game-ready assets alongside proof-of-work streaming renders back to the repository branch—completely unsupervised.
+This repository is organized for production operation from GitLab issue triggers, not local desktop execution.
 
----
+## What This Project Does
 
-## 🚀 How It Works (The 10-Step Pipeline)
+When a user opens a GitLab issue with title prefix `MeshGen:`, GitMesh can:
 
-When a developer opens a GitLab issue with a title that starts with `MeshGen:`, the **Google Agent Development Kit (ADK)**-powered brain takes total control, executing a sequential 10-step development pipeline:
+1. Trigger a GitLab pipeline via webhook
+2. Run staged 3D generation and processing on Modal
+3. Post progress updates back to the GitLab issue
+4. Upload final outputs and close the issue (optional)
 
-```mermaid
-graph TD
-    subgraph GitLab [1. UI / ChatOps Interface]
-        A["GitLab Issue Board (Title Prefix: MeshGen:)"] -->|1. Intercept Issue| C
-        B["GitLab Merge Request Workspace"] -.-|9. Commits Rigged GLB & MP4| H
-        B -.-|10. Posts Delivery Link| I["Final Review / Merge ✅"]
-    end
+## Remote Components
 
-    subgraph Brain [2. Orchestration Brain - Google Agent SDK]
-        C["Google ADK Agent (Gemini 3.5 Flash)"] <-->|Bidirectional Action Discovery| D["Model Context Protocol (MCP) Server"]
-        C -->|2, 4, 7. Progression Status Comments| B
-    end
+Core files for remote operation:
 
-    subgraph Compute [3. Technical Art Compute Layer - Modal serverless GPU]
-        C -->|3. Generate Base Mesh| E["Trellis 2 (L4 GPU)<br/>Sparse Reconstructor"]
-        C -->|5. Partition Submeshes| F["P3-SAM 3D (L4 GPU)<br/>Segment Anything Model"]
-        C -->|8. Animate & Render| G["Headless Blender (Core Container)<br/>bpy Procedural Rigging"]
-        E -->|Initial .glb| F
-        F -->|Spatially Isolated Segments| G
-        G -->|Turntable Engine Output| H["Rigged GLB + Turntable MP4 Preview"]
-    end
+1. `.gitlab-ci.yml`
+   - CI orchestration, stage order, issue comments, completion logic
+2. `setup_remote.ps1`
+   - Bootstrap utility for Modal deploy + secrets + GitLab vars + webhook
+3. `gitlab_webhook.py`
+   - Modal webhook endpoint; triggers GitLab pipeline for new issues
+4. `modal_app.py`
+   - Compute stage implementations (generation, segmentation, validation, animation)
+5. `.env`
+   - Operator-provided values used by bootstrap
+6. `ADK_MIGRATION_TRACKER.md`
+   - ADK migration status and role map
 
-    style C fill:#4285F4,stroke:#333,stroke-width:2px,color:#fff
-    style D fill:#34A853,stroke:#333,stroke-width:1px,color:#fff
-    style E fill:#EA4335,stroke:#333,stroke-width:1px,color:#fff
-    style F fill:#FBBC05,stroke:#333,stroke-width:1px,color:#fff
-    style G fill:#FF9F1C,stroke:#333,stroke-width:1px,color:#fff
-```
+## End-to-End Flow
 
-### The Breakdown:
-1. **Issue Analysis**: The agent intercepts a GitLab issue containing physical prop parameters (e.g., *"Lowpoly Pirate Chest, oak wood"*), automatically instantiates a new local Git branch, and opens a Merge Request.
-2. **Handshake Post**: The agent comments on the MR: `"Initializing GitMesh Pipeline: Generating base 3D mesh..."` 
-3. **Sparse Reconstruction (Trellis 2)**: Triggers serverless GPU routines on Modal to reconstruct a dense 3D point cloud and generate an initial clean `.glb` mesh envelope.
-4. **Interim Post**: Comments on the MR: `"Mesh completed. Segmenting semantic parts..."`
-5. **Semantic Part Segmentation (P3-SAM)**: Sends the mesh raw vertex buffers to **P3-SAM** (Segment Anything Model 3D) to automatically group discrete components (e.g., isolating a chest's *lid* from its *base*).
-6. **Kinetic Intelligence Core**: The agent's LLM brain parses the segmented components with spatial coordinates and crafts custom mechanical movement plans in standard JSON.
-7. **Animation Handshake**: Comments on MR: `"Applying procedural rigging and rendering preview..."`
-8. **Headless Blender Rigging (`bpy` + Workbench)**: Deploys a headless Blender container on Modal to write bone weights and keyframe the turntable loops.
-9. **Turntable Rendering**: Renders a standard turntable movie (`.mp4`) at 60 FPS using Blender's rapid Workbench engine.
-10. **Delivery & PR Checkout**: Pushes the finished `.glb` and preview `.mp4` into the Git repository branch, uploads structural markdown video embeds directly inside the MR comments, and updates MR status metadata to `ready for review`.
+1. User opens issue: `MeshGen: <asset request>`
+2. GitLab webhook calls deployed `gitlab_webhook.py`
+3. Webhook triggers GitLab pipeline with issue variables
+4. GitLab CI invokes Modal stages in sequence
+5. Issue receives progress/status comments
+6. Final outputs are posted and issue may auto-close
 
----
+## Configuration Reference
 
-## 🏛️ System Architecture
-
-GitMesh bridges cloud-native enterprise developer interfaces (GitLab) with state-of-the-art serverless GPU clusters using structured AI coordination:
-
-- **Google Agent Development Kit & Gemini API Key Server**: Orchestrates the multi-layered decisions, tool selection, and code injection sequences.
-- **Model Context Protocol (MCP)**: Standardizes tool declarations, executing low-level shell commands to spin up the `@gitlab/mcp-server-gitlab` bridge and communicate via bidirectional stdio streams.
-- **Serverless Task Container Blocks (Modal)**: Offloads heavy memory/processing pipelines into cold-start optimized micro-containers running on state-of-the-art neural cores on-demand.
-
----
-
-## 🛠️ The Tech Stack
-
-- **google-adk (Google Agent Development Kit)**: High-level Python developer SDK mapping system instructions into safe tool belts, managing recursive function calls, and carrying out multi-step code and design tasks with `gemini-3.5-flash`.
-- **Model Context Protocol (MCP)**: Universal context gateway standard allowing the Gemini developer brain to discover, call, and coordinate standard Git APIs securely over the `@gitlab/mcp-server-gitlab` dynamic tool schema.
-- **Modal Serverless Platforms**:
-    - **Trellis 2 (3D Generation)**: Runs serverless inference over state-of-the-art transformer 3D geometry builders on L4 GPUs.
-    - **GPU profile**: Runtime is pinned to L4 to avoid binary/package incompatibilities across GPU classes.
-  - **P3-SAM**: Runs high-accuracy part-to-semantic segmentation models.
-  - **Blender headless**: Standard Debian environments running custom `bpy` tasks to rig objects programmatically.
-- **FastAPI / Python 3.11**: Event-driven client core orchestrating background tasks, handling continuous streams of webhook events, and driving state machine processes.
-
----
-
-## Remote Production Setup
-
-GitMesh is intended to run remotely from GitLab. Local setup is only for development and debugging; end users should only need to open a GitLab issue.
-
-One-time operator setup:
-
-0. Create a Google Cloud project and get the project ID:
-
-```bash
-# Create project (choose your own globally unique PROJECT_ID)
-gcloud projects create YOUR_PROJECT_ID --name="GitMesh Production"
-
-# Set active project for subsequent commands
-gcloud config set project YOUR_PROJECT_ID
-
-# Print active project ID (use this value for GCP_PROJECT_ID)
-gcloud config get-value project
-```
-
-If you prefer the Console UI:
-1. Go to Google Cloud Console, create/select a project.
-2. Open IAM & Admin > Settings.
-3. Copy the Project ID (not Project Name).
-
-1. Enable Vertex AI in the Google Cloud project:
-
-```bash
-gcloud services enable aiplatform.googleapis.com
-```
-
-2. Create a narrowly scoped service account for Vertex calls and grant it Vertex AI access. Store its JSON key securely.
-
-3. Fill `.env` from `.env.example` with real values:
+### A) Required `.env` Values (Operator Input)
 
 ```text
 GCP_PROJECT_ID=...
 GCP_SERVICE_ACCOUNT_JSON={...}
 GITLAB_PROJECT_ID=...
-GITLAB_API_TOKEN=...             # token with API access to project vars/hooks/issues
+GITLAB_API_TOKEN=...
 GITLAB_TRIGGER_TOKEN=...
 GITLAB_WEBHOOK_SECRET=...
 MODAL_TOKEN_ID=...
 MODAL_TOKEN_SECRET=...
-AUTO_CLOSE_ISSUE=true            # default: close issue at pipeline completion
 ```
 
-Optional values:
+### B) Common Optional `.env` Values
 
 ```text
-GITLAB_URL=https://gitlab.com    # set this for self-managed GitLab
-WEBHOOK_URL=                     # override webhook URL if deploy output parsing fails
+GITLAB_URL=https://gitlab.com
 GITLAB_TRIGGER_REF=main
 LLM_PROVIDER=vertex
 IMAGE_MODEL=gemini-3.1-flash-image
+AUTO_CLOSE_ISSUE=true
+WEBHOOK_URL=
+USE_ADK_ORCHESTRATOR=true
+ADK_HARD_FAIL=false
+PIPELINE_DRY_RUN=false
 ```
 
-4. Run the one-command bootstrap:
+### C) Runtime Constraints in CI
+
+Current remote CI rules:
+
+1. `LLM_PROVIDER` is expected to be `vertex`
+2. `GEMINI_API_KEY` must not be set for production GitLab runs
+3. Modal secret `gitmesh-keys` must exist before stage execution
+
+ADK orchestration controls:
+
+1. `USE_ADK_ORCHESTRATOR=true` runs the ADK orchestrator first
+2. `ADK_HARD_FAIL=false` allows fallback to the direct Modal chain if ADK fails during migration
+3. `ADK_HARD_FAIL=true` makes the pipeline fail immediately if ADK fails
+4. `PIPELINE_DRY_RUN=false` is required for real product-quality runs
+
+## One-Time Setup
+
+### 1) Cloud prerequisites
+
+1. Create/select Google Cloud project
+2. Enable Vertex AI API
+3. Create service account with Vertex permissions
+4. Capture service account JSON for `.env`
+
+### 2) Fill `.env`
+
+Copy from `.env.example` and populate all required values.
+
+### 3) Run bootstrap
 
 ```powershell
 pwsh ./setup_remote.ps1
 ```
 
-What `setup_remote.ps1` does automatically (rerun-safe GitLab API flow):
-- Validates required `.env` keys.
-- Replaces and recreates Modal secret `gitmesh-keys` with runtime values used by `modal_app.py` and `gitlab_webhook.py`.
-- Deploys `gitlab_webhook.py` and `modal_app.py`.
-- Upserts GitLab CI/CD variables (`MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET`, `GITLAB_API_TOKEN`, `GITLAB_TRIGGER_TOKEN`, `GITLAB_WEBHOOK_SECRET`, `GITLAB_TRIGGER_REF`) with sensitive values masked and unprotected by default.
-- Creates or updates the GitLab project webhook for Issue events with your webhook secret.
-- Leaves issue auto-close enabled by default; set `AUTO_CLOSE_ISSUE=false` in GitLab CI/CD variables to keep issues open after completion.
+Bootstrap responsibilities:
 
-Useful flags:
+1. Validate `.env`
+2. Create/update Modal secret `gitmesh-keys`
+3. Deploy `gitlab_webhook.py`
+4. Deploy `modal_app.py`
+5. Upsert GitLab CI/CD variables
+6. Create/update GitLab issue webhook
+
+### 4) Verify setup
+
+1. Confirm pipeline variables exist in GitLab project settings
+2. Confirm webhook points to deployed Modal endpoint
+3. Confirm Modal secret `gitmesh-keys` exists
+
+## Bootstrap Variants
+
+Useful `setup_remote.ps1` flags:
 
 ```powershell
+pwsh ./setup_remote.ps1 -DryRun
 pwsh ./setup_remote.ps1 -SkipDeploy
 pwsh ./setup_remote.ps1 -SkipGitLabApi
-pwsh ./setup_remote.ps1 -DryRun
 pwsh ./setup_remote.ps1 -ProtectSensitiveVars
 pwsh ./setup_remote.ps1 -WebhookUrl https://<your-webhook-url>
 ```
 
-Do not set `GEMINI_API_KEY` in GitLab production. The CI preflight enforces `LLM_PROVIDER=vertex` and fails early if a Gemini API key is present.
+When to use:
 
-5. Trigger flow for end users:
+1. `-DryRun`: config validation only
+2. `-SkipDeploy`: update GitLab vars/webhook without redeploying Modal apps
+3. `-SkipGitLabApi`: deploy Modal apps and secret only
+4. `-WebhookUrl`: force webhook URL when auto-detect fails
+
+## GitLab CI Jobs
+
+`.gitlab-ci.yml` currently includes:
+
+1. `bootstrap_modal_remote` (manual)
+   - Bootstraps Modal and webhook from GitLab runner context
+2. `run_gitmesh_pipeline` (triggered)
+   - Runs staged compute pipeline
+   - Runs ADK-first when `USE_ADK_ORCHESTRATOR=true`
+   - Falls back to the direct Modal chain when `ADK_HARD_FAIL=false`
+   - Supports `PIPELINE_DRY_RUN=true` for control-plane validation only
+
+## Operating the Pipeline
+
+### Trigger from issue
+
+Open GitLab issue title:
 
 ```text
-Open GitLab issue with title: MeshGen: <asset request>
-GitLab webhook/trigger starts CI
-CI validates remote config and calls Modal
-Modal runs L4 GPU stages and posts progress/results back to GitLab
+MeshGen: lowpoly pirate chest with metal latch
 ```
 
----
+### Expected stage progression
 
-## 🚀 Sandbox Simulation Runs
+1. Stage 1: Prompt analysis
+2. Stage 2: Reference image
+3. Stage 3: Mesh generation
+4. Stage 3b: GLB validation
+5. Stage 4: Segmentation
+6. Stage 7: Part labeling
+7. Stage 8: Animation plan
+8. Stage 9: Plan validation
+9. Stage 10: Final render/export
 
-GitMesh is configured with a **Vertex AI first** auth strategy. `GEMINI_API_KEY` is only a local fallback.
+## Troubleshooting
 
-### Vertex AI Setup (Recommended Default)
+### Error: Could not connect to the Modal server
 
-If someone clones this repo, use the following setup steps before running pipeline stages that call Gemini/Imagen:
+Likely causes:
 
-```bash
-# 1) Install and initialize gcloud CLI (one-time)
-gcloud auth login
-gcloud config set project YOUR_GCP_PROJECT_ID
+1. Network/proxy path to `api.modal.com`
+2. Missing/invalid `MODAL_TOKEN_ID` or `MODAL_TOKEN_SECRET`
+3. Modal CLI auth not available in execution context
 
-# 2) Create Application Default Credentials for local SDK auth
-gcloud auth application-default login
+Checks:
 
-# 3) (Recommended) verify ADC token works
-gcloud auth application-default print-access-token
+1. Validate Modal tokens in GitLab CI variables
+2. Run bootstrap from a network that can reach Modal
+3. Use `bootstrap_modal_remote` job if local network is restricted
+
+### Error: Modal secret `gitmesh-keys` not found
+
+Fix:
+
+1. Re-run `setup_remote.ps1`
+2. Or run manual `bootstrap_modal_remote` CI job
+
+### Error: Blender subprocess no file `xvfb-run`
+
+Current behavior in `modal_app.py`:
+
+1. Uses `xvfb-run` when present
+2. Falls back to direct `blender -b` when missing
+
+Action:
+
+1. Redeploy `modal_app.py` so fallback logic is active remotely
+
+### Pipeline starts but no webhook trigger
+
+Check:
+
+1. GitLab webhook configured for Issue events
+2. Secret token matches `GITLAB_WEBHOOK_SECRET`
+3. Issue title starts with `MeshGen:`
+
+## Security Notes
+
+1. Treat `.env` as sensitive; never commit real secrets
+2. Use masked GitLab CI variables for tokens/secrets
+3. Rotate credentials immediately if exposed
+4. Keep service account permissions minimal (least privilege)
+
+## ADK Migration Status
+
+The repository is actively migrating to ADK-first orchestration.
+
+See `ADK_MIGRATION_TRACKER.md` for:
+
+1. Role-based logical agents
+2. Function mappings
+3. Cutover phases and rollback strategy
+
+## Scope
+
+This README intentionally focuses on remote GitLab production operation.
+
+## Local Testing (Optional)
+
+This section is optional. If you only care about remote GitLab operation, you can ignore everything below.
+
+Local/testing helper files:
+
+1. `agent.py`
+   - ADK orchestration test entrypoint
+2. `run_modal.ps1`
+   - Windows helper wrapper for `modal run`
+3. `run_modal.sh`
+   - Bash helper wrapper for `modal run`
+4. `run_modal_download.ps1`
+   - Windows helper for pulling assets from Modal volume
+5. `server.ts` and `package.json`
+   - Optional local Node/TS interface for testing workflows
+6. `Dockerfile.pipeline`
+   - Local container replica for dependency/runtime debugging
+
+Minimal local smoke test example:
+
+```powershell
+pwsh ./run_modal.ps1 modal_app.py::validate_glb --issue-iid "1" --gitlab-token "<token>"
 ```
 
-Minimum required Google Cloud APIs for this project:
-
-```bash
-gcloud services enable aiplatform.googleapis.com
-```
-
-For local `.env`:
-
-```bash
-GCP_PROJECT_ID="YOUR_GCP_PROJECT_ID"
-LLM_PROVIDER="vertex"
-GEMINI_API_KEY="optional-fallback-only"
-```
-
-Provider modes:
-
-```bash
-# Vertex-only (recommended default)
-LLM_PROVIDER="vertex"
-
-# Gemini API key only
-LLM_PROVIDER="gemini"
-
-# Vertex first, then Gemini fallback
-LLM_PROVIDER="auto"
-```
-
-Image model quality/cost tuning:
-
-```bash
-# Recommended default
-IMAGE_MODEL="gemini-3.1-flash-image"
-
-# Alternative Imagen and Gemini models
-IMAGE_MODEL="gemini-3.5-flash"
-IMAGE_MODEL="imagen-4.0-fast-generate-001"
-IMAGE_MODEL="imagen-4.0-generate-001"
-```
-
-GitMesh will automatically fall back through supported image model IDs if the preferred one is unavailable in your region/project.
-
-For CI/Modal secrets, prefer Vertex credentials and keep `GEMINI_API_KEY` unset unless you intentionally want fallback behavior.
-
-To spin up and simulate the local pipeline dry-run, tool-belt synthesis, and mock agent cycle:
-
-```bash
-# Export standard API tokens
-export GEMINI_API_KEY="your-gemini-key"
-export GITLAB_PRIVATE_TOKEN="your-gitlab-token"
-
-# Run the central orchestrator
-python3 agent.py
-```
-
-Optional environment variables for webhook/trigger components:
-
-```bash
-export GITLAB_PROJECT_ID="your-gitlab-project-id"
-export GITLAB_TRIGGER_TOKEN="your-gitlab-pipeline-trigger-token"
-export GITLAB_TRIGGER_REF="main"
-export GITLAB_WEBHOOK_SECRET="your-gitlab-webhook-secret"
-```
-
----
-
-## 🔮 V2 Roadmap (Hackathon Future Pitch)
-
-During game production, 3D props are completely empty without **organic sound design** to accompany their visual kinetic animation cues (e.g. wood creaking during a trunk-lid opening, steel echoing during sword swings).
-
-- **AudioLDM 2 Integration on Modal**: Add an extra orchestration tool `generate_audio_fx_for_part`.
-- **Procedural Sound Trigger Maps**: GitMesh's LLM brain will analyze the animation plan and auto-generate precise SFX (mp3 files) synchronized exactly with Blender keyframe limits.
-- **Dynamic GLTF Audio Ext**: Output unified spatial objects directly packaged with audio triggers, delivering a fully interactive visual-audio pipeline directly out of CI/CD.
+Again, none of the above is required for normal remote GitLab pipeline usage.

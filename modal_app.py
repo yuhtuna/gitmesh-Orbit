@@ -2130,6 +2130,7 @@ def animate_and_render_mesh(glb_url: str = "", animation_plan_json: str = "{}", 
     """
     import os
     import subprocess
+    import shutil
     import json
     import sys
     import time
@@ -2877,8 +2878,14 @@ except Exception as e:
 
     try:
         print("🎬 [Modal Blender Serverless] Spawning headless Blender process...")
+        blender_cmd = ["blender", "-b", "-P", script_path]
+        if shutil.which("xvfb-run"):
+            blender_cmd = ["xvfb-run", "-a"] + blender_cmd
+        else:
+            print("⚠️ xvfb-run not found; running Blender directly in background mode (-b).")
+
         res = subprocess.run(
-            ["xvfb-run", "-a", "blender", "-b", "-P", script_path],
+            blender_cmd,
             cwd=temp_dir,
             capture_output=True,
             text=True,

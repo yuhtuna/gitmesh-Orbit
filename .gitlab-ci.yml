@@ -1,8 +1,12 @@
 stages:
+  - bootstrap
   - generate_3d
 
 variables:
   LLM_PROVIDER: "vertex"
+  USE_ADK_ORCHESTRATOR: "true"
+  ADK_HARD_FAIL: "false"
+  PIPELINE_DRY_RUN: "false"
   AUTO_CLOSE_ISSUE: "true"
   ISSUE_TITLE: "Fallback Prompt"
   ISSUE_DESC: ""
@@ -10,6 +14,72 @@ variables:
   GITLAB_API_URL: "https://gitlab.com/api/v4/projects/$CI_PROJECT_ID"
   MODAL_LOGLEVEL: "DEBUG"
   GRPC_VERBOSITY: "DEBUG"
+
+bootstrap_modal_remote:
+  stage: bootstrap
+  image: python:3.10-slim
+  script: |
+    set -e
+    require_var() {
+      var_name="$1"
+      eval "var_value=\${$var_name:-}"
+      if [ -z "$var_value" ]; then
+        echo "Missing required CI/CD variable: $var_name"
+        exit 1
+      fi
+    }
+
+    require_var MODAL_TOKEN_ID
+    require_var MODAL_TOKEN_SECRET
+    require_var GCP_PROJECT_ID
+    require_var GCP_SERVICE_ACCOUNT_JSON
+    require_var GITLAB_PROJECT_ID
+    require_var GITLAB_TRIGGER_TOKEN
+    require_var GITLAB_WEBHOOK_SECRET
+    require_var GITLAB_API_TOKEN
+
+    GITLAB_URL="${GITLAB_URL:-https://gitlab.com}"
+    GITLAB_TRIGGER_REF="${GITLAB_TRIGGER_REF:-main}"
+    IMAGE_MODEL="${IMAGE_MODEL:-imagen-4.0-fast-generate-001}"
+
+    pip install --no-cache-dir modal
+
+    python -c "import json,os; data={'GCP_PROJECT_ID': os.environ['GCP_PROJECT_ID'], 'GCP_SERVICE_ACCOUNT_JSON': os.environ['GCP_SERVICE_ACCOUNT_JSON'], 'GITLAB_PROJECT_ID': os.environ['GITLAB_PROJECT_ID'], 'GITLAB_URL': os.environ.get('GITLAB_URL','https://gitlab.com'), 'GITLAB_TRIGGER_TOKEN': os.environ['GITLAB_TRIGGER_TOKEN'], 'GITLAB_WEBHOOK_SECRET': os.environ['GITLAB_WEBHOOK_SECRET'], 'GITLAB_TRIGGER_REF': os.environ.get('GITLAB_TRIGGER_REF','main'), 'LLM_PROVIDER': 'vertex', 'IMAGE_MODEL': os.environ.get('IMAGE_MODEL','imagen-4.0-fast-generate-001')}; open('gitmesh_secrets.json','w',encoding='utf-8').write(json.dumps(data))"
+
+    modal secret create gitmesh-keys --from-json gitmesh_secrets.json --force
+    modal deploy ./gitlab_webhook.py | tee webhook_deploy.log
+    modal deploy ./modal_app.py
+
+    WEBHOOK_URL="$(python -c "import re; t=open('webhook_deploy.log', encoding='utf-8', errors='ignore').read(); m=re.search(r'https://\\S*(?:modal\\.run|modal\\.site|modal\\.com)\\S*', t); print(m.group(0) if m else '')")"
+    if [ -z "$WEBHOOK_URL" ]; then
+      echo "Could not extract webhook URL from modal deploy output."
+      echo "Set WEBHOOK_URL variable manually and rerun bootstrap job."
+      exit 1
+    fi
+
+    HOOKS_API="${GITLAB_URL}/api/v4/projects/${GITLAB_PROJECT_ID}/hooks"
+    if ! curl --silent --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" "${HOOKS_API}" | grep -F "\"url\":\"${WEBHOOK_URL}\"" >/dev/null; then
+      curl --silent --show-error --fail --request POST \
+        --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" \
+        --form "url=${WEBHOOK_URL}" \
+        --form "token=${GITLAB_WEBHOOK_SECRET}" \
+        --form "issues_events=true" \
+        --form "push_events=false" \
+        --form "merge_requests_events=false" \
+        --form "tag_push_events=false" \
+        --form "note_events=false" \
+        --form "enable_ssl_verification=true" \
+        "${HOOKS_API}" >/dev/null
+      echo "Created webhook: ${WEBHOOK_URL}"
+    else
+      echo "Webhook already exists: ${WEBHOOK_URL}"
+    fi
+
+    echo "Modal bootstrap completed from GitLab runner."
+  when: manual
+  allow_failure: false
+  only:
+    - branches
 
 run_gitmesh_pipeline:
   stage: generate_3d
@@ -31,10 +101,13 @@ run_gitmesh_pipeline:
 
     echo "Running GitMesh remote preflight checks..."
     require_var GITLAB_API_TOKEN
-    require_var MODAL_TOKEN_ID
-    require_var MODAL_TOKEN_SECRET
     require_var ISSUE_IID
     require_var ISSUE_TITLE
+
+    if [ "${PIPELINE_DRY_RUN:-false}" != "true" ]; then
+      require_var MODAL_TOKEN_ID
+      require_var MODAL_TOKEN_SECRET
+    fi
 
     if [ "${LLM_PROVIDER}" != "vertex" ]; then
       echo "LLM_PROVIDER must be 'vertex' for remote GitLab production runs. Current value: ${LLM_PROVIDER}"
@@ -44,6 +117,46 @@ run_gitmesh_pipeline:
     if [ -n "${GEMINI_API_KEY:-}" ]; then
       echo "GEMINI_API_KEY must not be set in remote GitLab production. Use Vertex credentials in Modal secret gitmesh-keys."
       exit 1
+    fi
+
+    if [ "${PIPELINE_DRY_RUN:-false}" = "true" ]; then
+      echo "PIPELINE_DRY_RUN=true: simulating stages without Modal execution."
+      curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🧪 Dry-run mode enabled: validating GitLab automation only (Modal stages are simulated)." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
+      curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🧠 Stage 1 (simulated): Prompt analysis complete for '${ISSUE_TITLE}'." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
+      curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=📷 Stage 2 (simulated): Reference image generation complete." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
+      curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🧊 Stage 3 (simulated): Mesh generation complete." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
+      curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=✂️ Stage 4 (simulated): Mesh segmentation complete." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
+      curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🔧 Stages 5-6 (simulated): Blender cleanup + part renders complete." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
+      curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🏷️ Stage 7 (simulated): Part labeling complete." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
+      curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🎬 Stage 8 (simulated): Animation planning complete." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
+      curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=✅ Stage 9 (simulated): Validation complete." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
+      curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🎬 Stage 10 (simulated): Final export complete." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
+      curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🏁 Dry-run complete! GitLab trigger/comment/close automation path is working." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
+      if [ "${AUTO_CLOSE_ISSUE:-true}" = "true" ]; then
+        curl --request PUT --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "state_event=close" "${GITLAB_API_URL}/issues/${ISSUE_IID}"
+      fi
+      exit 0
+    fi
+
+    if [ "${USE_ADK_ORCHESTRATOR:-true}" = "true" ]; then
+      echo "============================================="
+      echo " GitMesh ADK-first orchestration enabled"
+      echo " ADK_HARD_FAIL=${ADK_HARD_FAIL:-false}"
+      echo "============================================="
+      pip install --no-cache-dir -r requirements.txt
+      if python agent.py --remote-ci; then
+        echo "ADK orchestrator completed successfully."
+        exit 0
+      else
+        adk_status="$?"
+      fi
+
+      echo "ADK orchestrator failed with status ${adk_status}."
+      curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=⚠️ GitMesh ADK orchestrator failed with status ${adk_status}. ${ADK_HARD_FAIL:-false} determines whether legacy fallback runs." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
+      if [ "${ADK_HARD_FAIL:-false}" = "true" ]; then
+        exit "${adk_status}"
+      fi
+      echo "ADK_HARD_FAIL=false: falling back to direct Modal stage chain."
     fi
 
     echo "============================================="

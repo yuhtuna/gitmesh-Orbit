@@ -61,6 +61,12 @@ function Require-Value {
 }
 
 function Get-ModalCommand {
+    if (Test-Path ".\.venv\Scripts\modal.exe") {
+        return ".\.venv\Scripts\modal.exe"
+    }
+    if (Test-Path ".\.venv\bin\modal") {
+        return ".\.venv\bin\modal"
+    }
     if (Test-Path ".\venv\Scripts\modal.exe") {
         return ".\venv\Scripts\modal.exe"
     }
@@ -273,6 +279,15 @@ if (-not $config.ContainsKey("GITLAB_TRIGGER_REF") -or [string]::IsNullOrWhiteSp
 if (-not $config.ContainsKey("GITLAB_URL") -or [string]::IsNullOrWhiteSpace($config["GITLAB_URL"])) {
     $config["GITLAB_URL"] = "https://gitlab.com"
 }
+if (-not $config.ContainsKey("USE_ADK_ORCHESTRATOR") -or [string]::IsNullOrWhiteSpace($config["USE_ADK_ORCHESTRATOR"])) {
+    $config["USE_ADK_ORCHESTRATOR"] = "true"
+}
+if (-not $config.ContainsKey("ADK_HARD_FAIL") -or [string]::IsNullOrWhiteSpace($config["ADK_HARD_FAIL"])) {
+    $config["ADK_HARD_FAIL"] = "false"
+}
+if (-not $config.ContainsKey("PIPELINE_DRY_RUN") -or [string]::IsNullOrWhiteSpace($config["PIPELINE_DRY_RUN"])) {
+    $config["PIPELINE_DRY_RUN"] = "false"
+}
 
 if ($DryRun) {
     Write-Host "[*] Dry-run mode enabled: validating config and planned actions only." -ForegroundColor Cyan
@@ -282,6 +297,9 @@ if ($DryRun) {
     Write-Host "[+] GitLab API automation planned: $(-not $SkipGitLabApi)" -ForegroundColor Green
     if (-not $SkipGitLabApi) {
         Write-Host "[+] Sensitive vars protected mode: $($ProtectSensitiveVars.IsPresent)" -ForegroundColor Green
+        Write-Host "[+] USE_ADK_ORCHESTRATOR=$($config["USE_ADK_ORCHESTRATOR"])" -ForegroundColor Green
+        Write-Host "[+] ADK_HARD_FAIL=$($config["ADK_HARD_FAIL"])" -ForegroundColor Green
+        Write-Host "[+] PIPELINE_DRY_RUN=$($config["PIPELINE_DRY_RUN"])" -ForegroundColor Green
     }
     if (-not [string]::IsNullOrWhiteSpace($WebhookUrl)) {
         Write-Host "[+] Webhook URL override provided via -WebhookUrl." -ForegroundColor Green
@@ -353,6 +371,9 @@ if (-not $SkipGitLabApi) {
     Set-GitLabVariable -BaseUrl $gitlabBaseUrl -ProjectId $config["GITLAB_PROJECT_ID"] -Headers $gitlabHeaders -Key "GITLAB_TRIGGER_TOKEN" -Value $config["GITLAB_TRIGGER_TOKEN"] -Masked $true -Protected $protectSensitive
     Set-GitLabVariable -BaseUrl $gitlabBaseUrl -ProjectId $config["GITLAB_PROJECT_ID"] -Headers $gitlabHeaders -Key "GITLAB_WEBHOOK_SECRET" -Value $config["GITLAB_WEBHOOK_SECRET"] -Masked $true -Protected $protectSensitive
     Set-GitLabVariable -BaseUrl $gitlabBaseUrl -ProjectId $config["GITLAB_PROJECT_ID"] -Headers $gitlabHeaders -Key "GITLAB_TRIGGER_REF" -Value $config["GITLAB_TRIGGER_REF"] -Masked $false -Protected $false
+    Set-GitLabVariable -BaseUrl $gitlabBaseUrl -ProjectId $config["GITLAB_PROJECT_ID"] -Headers $gitlabHeaders -Key "USE_ADK_ORCHESTRATOR" -Value $config["USE_ADK_ORCHESTRATOR"] -Masked $false -Protected $false
+    Set-GitLabVariable -BaseUrl $gitlabBaseUrl -ProjectId $config["GITLAB_PROJECT_ID"] -Headers $gitlabHeaders -Key "ADK_HARD_FAIL" -Value $config["ADK_HARD_FAIL"] -Masked $false -Protected $false
+    Set-GitLabVariable -BaseUrl $gitlabBaseUrl -ProjectId $config["GITLAB_PROJECT_ID"] -Headers $gitlabHeaders -Key "PIPELINE_DRY_RUN" -Value $config["PIPELINE_DRY_RUN"] -Masked $false -Protected $false
 
     if ([string]::IsNullOrWhiteSpace($resolvedWebhookUrl)) {
         throw "Could not determine webhook URL automatically. Re-run with -WebhookUrl https://<your-modal-webhook-url>."

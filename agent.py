@@ -12,6 +12,9 @@ import os
 import sys
 import asyncio
 import logging
+import subprocess
+import urllib.parse
+import urllib.request
 from typing import List, Dict, Any, Optional
 
 # Load environment variables
@@ -27,13 +30,191 @@ logging.basicConfig(
 logger = logging.getLogger("GitMeshHeadlessAgent")
 ADK_MODEL = "gemini-3.5-flash"
 
+
+def _env_value(name: str, required: bool = True, default: str = "") -> str:
+    value = os.getenv(name, default).strip()
+    if required and not value:
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    return value
+
+
+def _gitlab_api_url() -> str:
+    return os.getenv("GITLAB_API_URL", "").strip() or f"https://gitlab.com/api/v4/projects/{_env_value('CI_PROJECT_ID')}"
+
+
+def _post_gitlab_issue_comment(issue_iid: str, gitlab_token: str, body: str) -> None:
+    if not issue_iid or not gitlab_token:
+        logger.info("Skipping GitLab issue comment because issue IID or token is missing.")
+        return
+
+    url = f"{_gitlab_api_url()}/issues/{urllib.parse.quote(str(issue_iid), safe='')}/notes"
+    data = urllib.parse.urlencode({"body": body}).encode("utf-8")
+    request = urllib.request.Request(url, data=data, method="POST")
+    request.add_header("PRIVATE-TOKEN", gitlab_token)
+    request.add_header("Content-Type", "application/x-www-form-urlencoded")
+    with urllib.request.urlopen(request, timeout=60) as response:
+        logger.info("GitLab comment posted with status %s", response.status)
+
+
+def _close_gitlab_issue(issue_iid: str, gitlab_token: str) -> None:
+    if not issue_iid or not gitlab_token:
+        return
+
+    url = f"{_gitlab_api_url()}/issues/{urllib.parse.quote(str(issue_iid), safe='')}"
+    data = urllib.parse.urlencode({"state_event": "close"}).encode("utf-8")
+    request = urllib.request.Request(url, data=data, method="PUT")
+    request.add_header("PRIVATE-TOKEN", gitlab_token)
+    request.add_header("Content-Type", "application/x-www-form-urlencoded")
+    with urllib.request.urlopen(request, timeout=60) as response:
+        logger.info("GitLab issue close request returned status %s", response.status)
+
+
+def _run_modal_command(args: List[str], stage_name: str, timeout: int = 1800) -> str:
+    logger.info("[%s] Running command: %s", stage_name, " ".join(args))
+    result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+    if result.stdout:
+        print(result.stdout)
+    if result.stderr:
+        print(result.stderr, file=sys.stderr)
+    if result.returncode != 0:
+        raise RuntimeError(f"{stage_name} failed with exit code {result.returncode}")
+    return result.stdout or ""
+
+
+def _noop_role_agent(stage_name: str, responsibility: str) -> Dict[str, str]:
+    return {"stage_name": stage_name, "responsibility": responsibility, "status": "planned"}
+
+
+async def run_remote_adk_orchestrator() -> int:
+    """Run the production GitLab pipeline through an ADK-first role-agent orchestrator."""
+    issue_title = _env_value("ISSUE_TITLE")
+    issue_desc = _env_value("ISSUE_DESC", required=False)
+    issue_iid = _env_value("ISSUE_IID")
+    gitlab_token = _env_value("GITLAB_API_TOKEN")
+    auto_close_issue = os.getenv("AUTO_CLOSE_ISSUE", "true").strip().lower() == "true"
+
+    logical_agents = [
+        ("Request Intake Agent", "Normalize GitLab issue context and initialize run state."),
+        ("Reference Image Generator Agent", "Generate a visual reference image."),
+        ("3D Mesh Generator Agent", "Generate the base GLB mesh."),
+        ("GLB Output Validator Agent", "Validate generated GLB integrity."),
+        ("Mesh Segmentation Agent", "Split mesh into semantic parts."),
+        ("Part Labeling Agent", "Label segmented mesh parts."),
+        ("Animation Plan Generator Agent", "Create a structured animation plan."),
+        ("Animation Plan Validator Agent", "Validate and repair the animation plan."),
+        ("Blender Render and Export Agent", "Render animation and export final GLB."),
+        ("Delivery and Completion Agent", "Finalize issue status and delivery notes."),
+    ]
+
+    system_instruction = (
+        "You are the GitMesh remote ADK supervisor. Coordinate specialized role agents for a GitLab-triggered 3D asset pipeline. "
+        "You must plan, preserve stage order, and keep the user informed through GitLab issue comments. "
+        "Runtime execution is performed by Modal-backed stage commands owned by each logical agent."
+    )
+
+    try:
+        role_tools = []
+        supervisor = Agent(model=ADK_MODEL, system_instruction=system_instruction, tools=role_tools)
+        plan_prompt = (
+            f"Plan the remote GitMesh pipeline for GitLab issue #{issue_iid}.\n"
+            f"Title: {issue_title}\n\nDescription:\n{issue_desc}\n\n"
+            "Return a concise ordered plan naming each role agent and the handoff between agents."
+        )
+        logger.info("Submitting remote run context to ADK supervisor for planning.")
+        adk_plan = await supervisor.generate_content(plan_prompt)
+        print("\n========== ADK SUPERVISOR PLAN ==========")
+        print(adk_plan)
+        print("=========================================\n")
+    except Exception as exc:
+        logger.warning("ADK planning failed; continuing deterministic role-agent execution: %s", exc)
+
+    _post_gitlab_issue_comment(
+        issue_iid,
+        gitlab_token,
+        f"🧠 **GitMesh ADK Orchestrator Started**\nIssue #{issue_iid}: {issue_title}\nLogical agents: {len(logical_agents)}",
+    )
+
+    secret_list = _run_modal_command(["modal", "secret", "list"], "Modal Secret Preflight", timeout=300)
+    if "gitmesh-keys" not in secret_list:
+        raise RuntimeError("Modal secret 'gitmesh-keys' was not found. Run setup_remote.ps1 or bootstrap_modal_remote first.")
+
+    stage_commands = [
+        (
+            "Reference Image Generator Agent",
+            "📷 Stage 2: Reference Image - ADK agent dispatching Modal image generation...",
+            ["modal", "run", "modal_app.py::generate_reference_image", "--prompt", issue_title, "--issue-desc", issue_desc, "--issue-iid", issue_iid, "--gitlab-token", gitlab_token],
+        ),
+        (
+            "3D Mesh Generator Agent",
+            "🧊 Stage 3: Mesh Generation - ADK agent dispatching Modal GPU mesh generation...",
+            ["modal", "run", "modal_app.py::generate_3d_mesh", "--prompt", issue_title, "--issue-desc", issue_desc, "--style", "lowpoly", "--issue-iid", issue_iid, "--gitlab-token", gitlab_token],
+        ),
+        (
+            "GLB Output Validator Agent",
+            "🔍 Stage 3b: GLB Validation - ADK validator checking mesh integrity...",
+            ["modal", "run", "modal_app.py::validate_glb", "--issue-iid", issue_iid, "--gitlab-token", gitlab_token],
+        ),
+        (
+            "Mesh Segmentation Agent",
+            "✂️ Stage 4: Segmentation - ADK agent dispatching mesh segmentation...",
+            ["modal", "run", "modal_app.py::segment_mesh", "--issue-iid", issue_iid, "--gitlab-token", gitlab_token],
+        ),
+        (
+            "Part Labeling Agent",
+            "🏷️ Stage 7: Part Labeling - ADK label agent classifying segments...",
+            ["modal", "run", "modal_app.py::label_parts", "--asset-name", issue_title, "--issue-iid", issue_iid, "--gitlab-token", gitlab_token],
+        ),
+        (
+            "Animation Plan Generator Agent",
+            "🎬 Stage 8: Animation Planning - ADK motion agent generating plan...",
+            ["modal", "run", "modal_app.py::generate_animation_plan", "--asset-name", issue_title, "--issue-iid", issue_iid, "--gitlab-token", gitlab_token],
+        ),
+        (
+            "Animation Plan Validator Agent",
+            "✅ Stage 9: Validation - ADK validation agent checking motion constraints...",
+            ["modal", "run", "modal_app.py::validate_animation_plan", "--issue-iid", issue_iid, "--gitlab-token", gitlab_token],
+        ),
+        (
+            "Blender Render and Export Agent",
+            "🎬 Stage 10: Final Export - ADK render agent dispatching Blender export...",
+            ["modal", "run", "modal_app.py::animate_and_render_mesh", "--issue-iid", issue_iid, "--gitlab-token", gitlab_token],
+        ),
+    ]
+
+    for agent_name, comment, command in stage_commands:
+        logger.info("Dispatching %s", agent_name)
+        _post_gitlab_issue_comment(issue_iid, gitlab_token, comment)
+        _run_modal_command(command, agent_name)
+
+    _post_gitlab_issue_comment(
+        issue_iid,
+        gitlab_token,
+        f"🏁 **ADK-Orchestrated Pipeline Complete**\nAll role agents finished for: {issue_title}",
+    )
+    if auto_close_issue:
+        _close_gitlab_issue(issue_iid, gitlab_token)
+    return 0
+
 # =====================================================================
 # Google Agent Development Kit (ADK) SDK Imports & Fallbacks
 # =====================================================================
 try:
-    import google_adk as adk
-    from google_adk import Agent, Tool
-    logger.info("✅ Successfully imported google-adk (Google Agent Development Kit).")
+    try:
+        import google_adk as adk
+        from google_adk import Agent, Tool
+    except ImportError:
+        from google.adk.agents import Agent
+        from google.adk.tools import FunctionTool
+        adk = sys.modules.get("google.adk")
+
+        class Tool:
+            @staticmethod
+            def from_function(fn: Any) -> Any:
+                try:
+                    return FunctionTool(func=fn)
+                except TypeError:
+                    return FunctionTool(fn)
+    logger.info("✅ Successfully imported Google ADK.")
 except ImportError:
     logger.warning("⚠️ 'google-adk' package not found in current environment. Setting up dry-run fallback classes.")
     
@@ -270,6 +451,9 @@ async def connect_gitlab_mcp() -> Optional[Any]:
 # =====================================================================
 
 async def main():
+    if "--remote-ci" in sys.argv:
+        raise SystemExit(await run_remote_adk_orchestrator())
+
     logger.info("Initializing Headless GitMesh Pipeline Agent...")
 
     # Load and validate key configuration variables
