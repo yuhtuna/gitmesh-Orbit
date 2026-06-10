@@ -1769,6 +1769,85 @@ def generate_animation_plan(labels_json: str = "{}", asset_name: str = "", issue
 
     gemini_api_key = os.environ.get("GEMINI_API_KEY")
     animation_plan = {}
+    parts_metadata = {}
+    seg_data = {}
+
+    seg_path = "/mnt/data/assets/v2-segmented/segmentation.json"
+    if os.path.exists(seg_path):
+        try:
+            with open(seg_path, "r") as f:
+                seg_data = json.load(f)
+                parts_metadata = seg_data.get("parts", {})
+        except Exception as e:
+            print(f"⚠️ Failed to load segmentation metadata from {seg_path}: {e}")
+
+    def _find_part_id(part_label: str):
+        for pid, lbl in labels.items():
+            if str(lbl).lower() == str(part_label).lower():
+                return pid
+        return None
+
+    def _resolve_hinge_geometry(part_label: str, parent_label: str, axis: list, pivot_edge: str):
+        part_id = _find_part_id(part_label)
+        parent_id = _find_part_id(parent_label)
+        part_meta = parts_metadata.get(part_id, {}) if part_id else {}
+        parent_meta = parts_metadata.get(parent_id, {}) if parent_id else {}
+        bbox = part_meta.get("bounding_box", [])
+        if not bbox or len(bbox) != 2:
+            return {
+                "axis": axis,
+                "pivot": [0, 0, 0],
+                "hinge_length": 0.4,
+                "hinge_radius": 0.02,
+                "pivot_source": "template-default"
+            }
+
+        px_min, py_min, pz_min = bbox[0]
+        px_max, py_max, pz_max = bbox[1]
+        parent_bbox = parent_meta.get("bounding_box", [])
+        parent_py_max = py_min
+        parent_pz_min = pz_min
+        parent_pz_max = pz_max
+        if parent_bbox and len(parent_bbox) == 2:
+            parent_py_max = parent_bbox[1][1]
+            parent_pz_min = parent_bbox[0][2]
+            parent_pz_max = parent_bbox[1][2]
+
+        mag = sum(float(a) * float(a) for a in axis) ** 0.5
+        normalized_axis = [float(a) / mag for a in axis] if mag > 0.001 else [1.0, 0.0, 0.0]
+
+        target_x = (px_min + px_max) / 2.0
+        target_y = py_min
+        target_z = pz_max if pivot_edge == "max_z" else pz_min
+
+        if normalized_axis[0] > 0.5:
+            target_y = py_min if not parent_bbox else (py_min + parent_py_max) / 2.0
+            if pivot_edge == "min_z":
+                target_z = max(pz_min, parent_pz_min)
+            elif pivot_edge == "max_z":
+                target_z = min(pz_max, parent_pz_max)
+            elif pivot_edge == "min_x":
+                target_x = px_min
+            elif pivot_edge == "max_x":
+                target_x = px_max
+        elif normalized_axis[1] > 0.5:
+            target_x = px_min if pivot_edge != "max_x" else px_max
+            target_y = (py_min + py_max) / 2.0
+            target_z = max(pz_min, parent_pz_min)
+        else:
+            target_x = px_min
+            target_y = (py_min + py_max) / 2.0
+            target_z = max(pz_min, parent_pz_min)
+
+        hinge_length = max(px_max - px_min, py_max - py_min, pz_max - pz_min)
+        max_dim = hinge_length
+        return {
+            "axis": normalized_axis,
+            "pivot": [target_x, target_y, target_z],
+            "hinge_length": max(0.05, hinge_length),
+            "hinge_radius": max(0.005, max_dim * 0.008),
+            "pivot_source": "segmentation-bbox"
+        }
 
     # Template-Based Physics
     # Load the gemini_plan generated during segment_mesh
@@ -1795,6 +1874,7 @@ def generate_animation_plan(labels_json: str = "{}", asset_name: str = "", issue
 
     if gemini_archetype == "VERTICAL_SPLIT":
         predicted_hinge_axis = gemini_plan.get("hinge_axis", [0, 1, 0])
+        hinge_geometry = _resolve_hinge_geometry(moving_part_label, parent_part_label, predicted_hinge_axis, predicted_pivot_edge)
         print("🎬 [Template] Generating VERTICAL_SPLIT (Door) animation template...")
         animation_plan = {
             "asset_name": asset_name,
@@ -1802,19 +1882,21 @@ def generate_animation_plan(labels_json: str = "{}", asset_name: str = "", issue
                 {
                     "part": moving_part_label, # door panel
                     "op": "ROTATE_HINGE",
-                    "axis": predicted_hinge_axis,
-                    "pivot": [0, 0, 0], 
+                    "axis": hinge_geometry["axis"],
+                    "pivot": hinge_geometry["pivot"], 
                     "pivot_edge": predicted_pivot_edge,
                     "angle_deg": -60,
                     "duration_s": 1.5,
                     "order": 1,
                     "parent": parent_part_label, # frame
-                    "hinge_length": 0.4,
-                    "hinge_radius": 0.02
+                    "hinge_length": hinge_geometry["hinge_length"],
+                    "hinge_radius": hinge_geometry["hinge_radius"],
+                    "pivot_source": hinge_geometry["pivot_source"]
                 }
             ]
         }
     elif gemini_archetype == "HORIZONTAL_SPLIT":
+        hinge_geometry = _resolve_hinge_geometry(moving_part_label, parent_part_label, predicted_hinge_axis, predicted_pivot_edge)
         print("🎬 [Template] Generating HORIZONTAL_SPLIT (Chest) animation template...")
         animation_plan = {
             "asset_name": asset_name,
@@ -1822,15 +1904,16 @@ def generate_animation_plan(labels_json: str = "{}", asset_name: str = "", issue
                 {
                     "part": moving_part_label, # lid
                     "op": "ROTATE_HINGE",
-                    "axis": predicted_hinge_axis,
-                    "pivot": [0, 0, 0],
+                    "axis": hinge_geometry["axis"],
+                    "pivot": hinge_geometry["pivot"],
                     "pivot_edge": predicted_pivot_edge,
                     "angle_deg": -60,
                     "duration_s": 1.5,
                     "order": 1,
                     "parent": parent_part_label, # base
-                    "hinge_length": 0.4,
-                    "hinge_radius": 0.02
+                    "hinge_length": hinge_geometry["hinge_length"],
+                    "hinge_radius": hinge_geometry["hinge_radius"],
+                    "pivot_source": hinge_geometry["pivot_source"]
                 }
             ]
         }
@@ -2027,7 +2110,14 @@ def validate_animation_plan(plan_json: str = "{}", labels_json: str = "{}", issu
             auto_fixes.append(f"{part_name}: defaulted order to 1")
 
         # 5. Hinge Pivot Auto-correction
-        if op == "ROTATE_HINGE":
+        pivot = step.get("pivot", [])
+        has_placeholder_pivot = (
+            not isinstance(pivot, list)
+            or len(pivot) != 3
+            or all(abs(float(v)) < 1e-6 for v in pivot)
+        )
+
+        if op == "ROTATE_HINGE" and has_placeholder_pivot:
             try:
                 part_id = None
                 for pid, lbl in labels.items():
