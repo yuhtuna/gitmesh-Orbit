@@ -3077,17 +3077,32 @@ except Exception as e:
 
     # Upload final GLB and post completion comment
     final_uploaded = _upload_to_gitlab(glb_out_path, issue_iid, gitlab_token)
-    _post_gitlab_comment(issue_iid, gitlab_token,
-        f"🎬 **Stage 10: Animation Exported**\n"
-        f"- Frames rendered: {total_frames if animation_success else plan.get('frames', 24)}\n"
-        f"- File size: {file_size_kb} KB\n"
-        f"- Engine: {'Blender' if animation_success else 'Trimesh Fallback'}\n"
-        + (f"- [Download Animated GLB]({final_uploaded})" if final_uploaded else "")
-    )
+    
+    # Upload turntable preview MP4 if it exists
+    video_uploaded = None
+    if os.path.exists(mp4_out_path) and os.path.getsize(mp4_out_path) > 100:
+        print(f"🎬 Uploading turntable preview MP4: {mp4_out_path}")
+        video_uploaded = _upload_to_gitlab(mp4_out_path, issue_iid, gitlab_token)
+
+    comment_parts = [
+        f"🎬 **Stage 10: Animation Exported**",
+        f"- Frames rendered: {total_frames if animation_success else plan.get('frames', 24)}",
+        f"- File size: {file_size_kb} KB",
+        f"- Engine: {'Blender' if animation_success else 'Trimesh Fallback'}"
+    ]
+    if final_uploaded:
+        comment_parts.append(f"- [Download Animated GLB]({final_uploaded})")
+    if video_uploaded:
+        comment_parts.append(f"- [View Turntable Preview MP4]({video_uploaded})")
+        comment_parts.append(f"\n![Turntable Preview]({video_uploaded})")
+
+    _post_gitlab_comment(issue_iid, gitlab_token, "\n".join(comment_parts))
+
     return {
         "status": "success",
         "animated_glb_path": glb_out_path,
         "final_upload_url": final_uploaded,
+        "preview_video_url": video_uploaded,
         "total_frames_rendered": total_frames if animation_success else plan.get('frames', 24),
         "file_size_kb": file_size_kb,
         "render_engine": "Blender" if animation_success else "Trimesh Fallback"
@@ -3329,7 +3344,7 @@ def run_full_pipeline(prompt: str, issue_desc: str = "", issue_iid: str = None, 
     
     # 8. Animate and render
     print("🎬 [Stage 10] Running animate_and_render_mesh...")
-    animate_and_render_mesh.local(issue_iid=issue_iid, gitlab_token=gitlab_token)
+    animate_and_render_mesh.remote(issue_iid=issue_iid, gitlab_token=gitlab_token)
     
     print("🏁 [GitMesh Pipeline Orchestrator] Completed 10-stage remote pipeline successfully!")
 
