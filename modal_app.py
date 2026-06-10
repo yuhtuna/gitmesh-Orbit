@@ -349,7 +349,7 @@ def _call_gemini_vertex(prompt: str, model_name: str) -> Optional[str]:
             vertexai=True,
             project=_require_gcp_project_id(),
             location=VERTEX_LOCATION,
-            http_options={"credentials": credentials} if credentials else None
+            credentials=credentials
         )
         
         response = client.models.generate_content(
@@ -475,7 +475,7 @@ def _generate_imagen_vertex(prompt: str) -> Optional[bytes]:
             vertexai=True,
             project=_require_gcp_project_id(),
             location=VERTEX_LOCATION,
-            http_options={"credentials": credentials} if credentials else None
+            credentials=credentials
         )
             
         for model_id in _get_image_model_candidates():
