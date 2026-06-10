@@ -90,9 +90,22 @@ def _gemini_api_allowed() -> bool:
 def _get_image_model_candidates() -> list[str]:
     """
     Returns preferred image generation model IDs from newest/cost-effective to legacy fallback.
-    Override first choice with IMAGE_MODEL env var.
+    Priority:
+      1) IMAGE_MODEL env var (explicit override)
+      2) QUALITY_MODE default mapping:
+         - low: imagen-4.0-fast-generate-001
+         - med/high: gemini-3.1-flash-image
     """
-    preferred = os.environ.get("IMAGE_MODEL", "imagen-4.0-fast-generate-001").strip()
+    image_override = (os.environ.get("IMAGE_MODEL") or "").strip()
+    quality_mode = (os.environ.get("QUALITY_MODE") or "med").strip().lower()
+
+    if image_override:
+        preferred = image_override
+    elif quality_mode == "low":
+        preferred = "imagen-4.0-fast-generate-001"
+    else:
+        preferred = "gemini-3.1-flash-image"
+
     candidates = [
         preferred,
         "imagen-4.0-fast-generate-001",
