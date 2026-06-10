@@ -113,8 +113,11 @@ Model defaults:
 
 1. Remote production uses Vertex AI through `LLM_PROVIDER=vertex`
 2. The ADK supervisor model is `gemini-3.5-flash` in `agent.py`
-3. Reference-image generation defaults to `IMAGE_MODEL=gemini-3.1-flash-image`
-4. Text planning/classification calls in `modal_app.py` use `gemini-3.5-flash` through Vertex first
+3. Reference-image generation defaults by `QUALITY_MODE` when `IMAGE_MODEL` is not set:
+   - `low` → `imagen-4.0-fast-generate-001`
+   - `med` / `high` → `gemini-3.1-flash-image`
+4. Set `IMAGE_MODEL` explicitly to override this mapping for any run
+5. Text planning/classification calls in `modal_app.py` use `gemini-3.5-flash` through Vertex first
 
 ## One-Time Setup
 
@@ -194,6 +197,22 @@ Source of truth for a pipeline run:
 3. If logic changed in `modal_app.py`, `agent.py`, or `.gitlab-ci.yml`, that code must be pushed before the next run.
 
 ## Operating the Pipeline
+
+### How to change quality mode
+
+Use `QUALITY_MODE` with one of: `low`, `med`, `high`.
+
+Ways users can change it:
+
+1. GitLab UI: Run pipeline manually and set variable `QUALITY_MODE=low|med|high`
+2. Trigger API: pass `variables[QUALITY_MODE]=low|med|high` in the trigger request body
+3. Local defaults: set `QUALITY_MODE` in `.env` (used by local helper scripts and API-trigger commands)
+
+Recommended usage:
+
+1. `low`: fastest iteration while tuning prompts/animation behavior
+2. `med`: balanced production default
+3. `high`: best quality/safety, slower runtime
 
 ### Trigger from issue
 
