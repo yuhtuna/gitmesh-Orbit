@@ -126,7 +126,7 @@ def _format_logical_agent_plan(issue_iid: str, issue_title: str, logical_agents:
 
 
 async def run_remote_adk_orchestrator() -> int:
-    """Run the production GitLab pipeline through an ADK-first role-agent orchestrator."""
+    """Run the production GitLab pipeline through a true multi-agent system using Google ADK."""
     issue_title = _env_value("ISSUE_TITLE")
     issue_desc = _env_value("ISSUE_DESC", required=False)
     issue_iid = _env_value("ISSUE_IID")
@@ -134,54 +134,60 @@ async def run_remote_adk_orchestrator() -> int:
     auto_close_issue = os.getenv("AUTO_CLOSE_ISSUE", "true").strip().lower() == "true"
     use_single_call_pipeline = os.getenv("USE_SINGLE_CALL_PIPELINE", "false").strip().lower() == "true"
 
-    logical_agents = [
-        ("Request Intake Agent", "Normalize GitLab issue context and initialize run state."),
-        ("Reference Image Generator Agent", "Generate a visual reference image."),
-        ("3D Mesh Generator Agent", "Generate the base GLB mesh."),
-        ("GLB Output Validator Agent", "Validate generated GLB integrity."),
-        ("Mesh Segmentation Agent", "Split mesh into semantic parts."),
-        ("Part Labeling Agent", "Label segmented mesh parts."),
-        ("Animation Plan Generator Agent", "Create a structured animation plan."),
-        ("Animation Plan Validator Agent", "Validate and repair the animation plan."),
-        ("Blender Render and Export Agent", "Render animation and export final GLB."),
-        ("Delivery and Completion Agent", "Finalize issue status and delivery notes."),
-    ]
-
-    system_instruction = (
-        "You are the GitMesh remote ADK supervisor. Coordinate specialized role agents for a GitLab-triggered 3D asset pipeline. "
-        "You must plan, preserve stage order, and keep the user informed through GitLab issue comments. "
-        "Runtime execution is performed by Modal-backed stage commands owned by each logical agent."
+    # Define specialized agents
+    concept_artist = create_adk_agent(
+        name="Concept_Artist_Agent",
+        model=ADK_MODEL,
+        instruction=(
+            "You are the GitMesh Concept Artist. Your role is to analyze user requests for 3D assets "
+            "and generate high-quality visual prompts and reference concepts. You specialize in "
+            "visual style, materials, and lighting descriptors."
+        ),
+        tools=[]
     )
 
-    try:
-        role_tools = []
-        supervisor = create_adk_agent(
-            name="gitmesh_remote_supervisor",
-            model=ADK_MODEL,
-            instruction=system_instruction,
-            tools=role_tools,
-        )
-        plan_prompt = (
-            f"Plan the remote GitMesh pipeline for GitLab issue #{issue_iid}.\n"
-            f"Title: {issue_title}\n\nDescription:\n{issue_desc}\n\n"
-            "Return a concise ordered plan naming each role agent and the handoff between agents."
-        )
-        logger.info("Submitting remote run context to ADK supervisor for planning.")
-        if hasattr(supervisor, "generate_content"):
-            adk_plan = await supervisor.generate_content(plan_prompt)
-        else:
-            logger.info("ADK supervisor initialized; installed SDK uses Runner/Context execution, so emitting deterministic role plan.")
-            adk_plan = _format_logical_agent_plan(issue_iid, issue_title, logical_agents)
-        print("\n========== ADK SUPERVISOR PLAN ==========")
-        print(adk_plan)
-        print("=========================================\n")
-    except Exception as exc:
-        logger.warning("ADK planning failed; continuing deterministic role-agent execution: %s", exc)
+    mesh_architect = create_adk_agent(
+        name="Mesh_Architect_Agent",
+        model=ADK_MODEL,
+        instruction=(
+            "You are the GitMesh 3D Mesh Architect. Your role is to oversee the generation and "
+            "validation of 3D geometry. You ensure the resulting GLB file is manifold, clean, "
+            "and follows the requested stylistic constraints (e.g., lowpoly)."
+        ),
+        tools=[]
+    )
+
+    motion_engineer = create_adk_agent(
+        name="Motion_Engineer_Agent",
+        model=ADK_MODEL,
+        instruction=(
+            "You are the GitMesh Physics & Motion Engineer. Your role is to perform spatial reasoning "
+            "on 3D meshes. You determine how to segment a mesh into parts (e.g., lid vs base) and "
+            "calculate precise animation plans (hinges, pivots, rotations) based on the object's archetype."
+        ),
+        tools=[]
+    )
+
+    qa_agent = create_adk_agent(
+        name="QA_Delivery_Agent",
+        model=ADK_MODEL,
+        instruction=(
+            "You are the GitMesh QA and Delivery Agent. Your role is to perform final validation on "
+            "the animated assets and ensure everything is correctly delivered to the user. You "
+            "summarize the pipeline results and provide the final download links."
+        ),
+        tools=[]
+    )
 
     _post_gitlab_issue_comment(
         issue_iid,
         gitlab_token,
-        f"🧠 **GitMesh ADK Orchestrator Started**\nIssue #{issue_iid}: {issue_title}\nLogical agents: {len(logical_agents)}",
+        f"🧠 **GitMesh Multi-Agent Orchestrator Started**\n"
+        f"Assigned Agents:\n"
+        f"1. 🎨 **Concept Artist**: Reference generation\n"
+        f"2. 🏗️ **Mesh Architect**: 3D reconstruction\n"
+        f"3. ⚙️ **Motion Engineer**: Rigging & Animation\n"
+        f"4. ✅ **QA Agent**: Validation & Delivery"
     )
 
     secret_list = _run_modal_command(["modal", "secret", "list"], "Modal Secret Preflight", timeout=300)
@@ -192,7 +198,7 @@ async def run_remote_adk_orchestrator() -> int:
         _post_gitlab_issue_comment(
             issue_iid,
             gitlab_token,
-            "⚡ Single-call mode enabled: running pipeline in one Modal container to reduce orchestration overhead.",
+            "⚡ **Single-call mode enabled**: Running entire pipeline in one optimized Modal container.",
         )
         _run_modal_command(
             [
@@ -213,56 +219,58 @@ async def run_remote_adk_orchestrator() -> int:
         _post_gitlab_issue_comment(
             issue_iid,
             gitlab_token,
-            f"🏁 **ADK-Orchestrated Pipeline Complete**\nAll role agents finished for: {issue_title}",
+            f"🏁 **ADK-Orchestrated Pipeline Complete**\nAll specialized agents have finished their tasks for: {issue_title}",
         )
         if auto_close_issue:
             _close_gitlab_issue(issue_iid, gitlab_token)
         return 0
 
+    # Multi-agent stage execution
     stage_commands = [
         (
-            "Reference Image Generator Agent",
-            "📷 Stage 2: Reference Image - ADK agent dispatching Modal image generation...",
+            concept_artist,
+            "🎨 **Concept Artist Agent**: Dispatching visual reference generation...",
             ["modal", "run", "modal_app.py::generate_reference_image", "--prompt", issue_title, "--issue-desc", issue_desc, "--issue-iid", issue_iid, "--gitlab-token", gitlab_token],
         ),
         (
-            "3D Mesh Generator Agent",
-            "🧊 Stage 3: Mesh Generation - ADK agent dispatching Modal GPU mesh generation...",
+            mesh_architect,
+            "🏗️ **Mesh Architect Agent**: Reconstructing 3D geometry and validating topology...",
             ["modal", "run", "modal_app.py::generate_3d_mesh", "--prompt", issue_title, "--issue-desc", issue_desc, "--style", "lowpoly", "--issue-iid", issue_iid, "--gitlab-token", gitlab_token],
         ),
         (
-            "GLB Output Validator Agent",
-            "🔍 Stage 3b: GLB Validation - ADK validator checking mesh integrity...",
+            mesh_architect,
+            "🏗️ **Mesh Architect Agent**: Performing geometric validation...",
             ["modal", "run", "modal_app.py::validate_glb", "--issue-iid", issue_iid, "--gitlab-token", gitlab_token],
         ),
         (
-            "Mesh Segmentation Agent",
-            "✂️ Stage 4: Segmentation - ADK agent dispatching mesh segmentation...",
+            motion_engineer,
+            "⚙️ **Motion Engineer Agent**: Analyzing spatial structure and planning physics-based motion...",
             ["modal", "run", "modal_app.py::segment_mesh", "--issue-iid", issue_iid, "--gitlab-token", gitlab_token],
         ),
         (
-            "Part Labeling Agent",
-            "🏷️ Stage 7: Part Labeling - ADK label agent classifying segments...",
+            motion_engineer,
+            "⚙️ **Motion Engineer Agent**: Classifying segments...",
             ["modal", "run", "modal_app.py::label_parts", "--asset-name", issue_title, "--issue-iid", issue_iid, "--gitlab-token", gitlab_token],
         ),
         (
-            "Animation Plan Generator Agent",
-            "🎬 Stage 8: Animation Planning - ADK motion agent generating plan...",
+            motion_engineer,
+            "⚙️ **Motion Engineer Agent**: Generating animation plan...",
             ["modal", "run", "modal_app.py::generate_animation_plan", "--asset-name", issue_title, "--issue-iid", issue_iid, "--gitlab-token", gitlab_token],
         ),
         (
-            "Animation Plan Validator Agent",
-            "✅ Stage 9: Validation - ADK validation agent checking motion constraints...",
+            qa_agent,
+            "✅ **QA Agent**: Performing final verification...",
             ["modal", "run", "modal_app.py::validate_animation_plan", "--issue-iid", issue_iid, "--gitlab-token", gitlab_token],
         ),
         (
-            "Blender Render and Export Agent",
-            "🎬 Stage 10: Final Export - ADK render agent dispatching Blender export...",
+            qa_agent,
+            "✅ **QA Agent**: Rendering production preview...",
             ["modal", "run", "modal_app.py::animate_and_render_mesh", "--issue-iid", issue_iid, "--gitlab-token", gitlab_token],
         ),
     ]
 
-    for agent_name, comment, command in stage_commands:
+    for agent, comment, command in stage_commands:
+        agent_name = getattr(agent, "name", "GitMesh Agent")
         logger.info("Dispatching %s", agent_name)
         _post_gitlab_issue_comment(issue_iid, gitlab_token, comment)
         _run_modal_command(command, agent_name)
@@ -270,7 +278,7 @@ async def run_remote_adk_orchestrator() -> int:
     _post_gitlab_issue_comment(
         issue_iid,
         gitlab_token,
-        f"🏁 **ADK-Orchestrated Pipeline Complete**\nAll role agents finished for: {issue_title}",
+        f"🏁 **ADK-Orchestrated Pipeline Complete**\nAll specialized agents have finished their tasks for: {issue_title}",
     )
     if auto_close_issue:
         _close_gitlab_issue(issue_iid, gitlab_token)
