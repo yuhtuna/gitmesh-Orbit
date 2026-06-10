@@ -1779,8 +1779,14 @@ def generate_animation_plan(labels_json: str = "{}", asset_name: str = "", issue
     predicted_hinge_axis = gemini_plan.get("hinge_axis", [1, 0, 0])
     predicted_pivot_edge = gemini_plan.get("pivot_edge", "max_z")
 
-    moving_part_label = labels.get("part_0", "part_0")
-    parent_part_label = labels.get("part_1", "part_1")
+    # For HORIZONTAL_SPLIT and SPIN, part_1 is the moving part (lid/head)
+    # For VERTICAL_SPLIT, part_0 is the moving part (door)
+    if gemini_archetype in ["HORIZONTAL_SPLIT", "SPIN"]:
+        moving_part_label = labels.get("part_1", "part_1")  # lid or head
+        parent_part_label = labels.get("part_0", "part_0")  # base
+    else:
+        moving_part_label = labels.get("part_0", "part_0")  # door or default
+        parent_part_label = labels.get("part_1", "part_1")  # frame or default
 
     if gemini_archetype == "VERTICAL_SPLIT":
         predicted_hinge_axis = gemini_plan.get("hinge_axis", [0, 1, 0])
