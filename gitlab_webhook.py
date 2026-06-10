@@ -40,6 +40,7 @@ async def gitlab_issue_listener(req: Request):
       - The engine pipeline is always triggered, with TARGET_* variables so the
         compute stages report back to the originating project.
     """
+    import json
     import urllib.request
     import urllib.parse
 
@@ -47,6 +48,7 @@ async def gitlab_issue_listener(req: Request):
     gitlab_project_id = os.environ.get("GITLAB_PROJECT_ID", "")
     gitlab_url = os.environ.get("GITLAB_URL", "https://gitlab.com").rstrip("/")
     gitlab_trigger_token = os.environ.get("GITLAB_TRIGGER_TOKEN", "")
+    gitlab_api_token = os.environ.get("GITLAB_API_TOKEN", "")
     gitlab_trigger_ref = os.environ.get("GITLAB_TRIGGER_REF", "main")
     gitlab_webhook_secret = os.environ.get("GITLAB_WEBHOOK_SECRET", "")
 
@@ -96,6 +98,60 @@ async def gitlab_issue_listener(req: Request):
         target_project_id = source_project_id or gitlab_project_id
         target_gitlab_url = (record.get("gitlab_url") or gitlab_url).rstrip("/")
         ref = record.get("trigger_ref") or gitlab_trigger_ref
+
+        # Duplicate-run guard: if a pipeline for the same issue is already
+        # pending/running, skip creating another one.
+        if gitlab_api_token:
+            def _get_json(api_url: str):
+                req_obj = urllib.request.Request(
+                    api_url,
+                    headers={"PRIVATE-TOKEN": gitlab_api_token},
+                )
+                with urllib.request.urlopen(req_obj, timeout=10) as resp:
+                    return json.loads(resp.read().decode("utf-8"))
+
+            def _find_active_duplicate() -> str:
+                base = f"{gitlab_url}/api/v4/projects/{gitlab_project_id}"
+                for status in ("running", "pending"):
+                    try:
+                        pipelines = _get_json(
+                            f"{base}/pipelines?status={status}&order_by=id&sort=desc&per_page=25"
+                        )
+                    except Exception as e:
+                        print(f"Duplicate check skipped ({status} list failed): {e}")
+                        continue
+
+                    for pipeline in pipelines:
+                        pipeline_id = str(pipeline.get("id", "") or "").strip()
+                        if not pipeline_id:
+                            continue
+                        try:
+                            vars_list = _get_json(f"{base}/pipelines/{pipeline_id}/variables")
+                        except Exception:
+                            continue
+
+                        vmap = {
+                            str(v.get("key", "")): str(v.get("value", ""))
+                            for v in vars_list if isinstance(v, dict)
+                        }
+                        same_issue = str(vmap.get("ISSUE_IID", "")).strip() == str(issue_iid).strip()
+                        same_target = str(vmap.get("TARGET_PROJECT_ID", target_project_id)).strip() == str(target_project_id).strip()
+                        if same_issue and same_target:
+                            return pipeline_id
+                return ""
+
+            existing_pipeline_id = _find_active_duplicate()
+            if existing_pipeline_id:
+                print(
+                    f"Duplicate pipeline suppressed for issue #{issue_iid} "
+                    f"(target project {target_project_id}). Existing pipeline: {existing_pipeline_id}"
+                )
+                return {
+                    "status": "duplicate_suppressed",
+                    "existing_pipeline_id": existing_pipeline_id,
+                    "target_project_id": target_project_id,
+                }
+
         print(f"Triggering 3D Pipeline for prompt: {prompt} (target project {target_project_id})")
 
         url = f"{gitlab_url}/api/v4/projects/{gitlab_project_id}/trigger/pipeline"
