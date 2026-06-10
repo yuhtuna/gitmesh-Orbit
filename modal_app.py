@@ -1242,7 +1242,7 @@ def segment_mesh(glb_url: str = "", prompt_tags: str = "", issue_iid: str = None
                 print(f"📦 Part {part_name} ({semantic_name}): {len(part_mesh.faces)} faces ({segmented_parts[part_name]['face_fraction']*100:.1f}%), center: {center}")
 
             moving_fraction = segmented_parts.get("part_0", {}).get("face_fraction")
-            if operation_type == "SMART_BISECT" and isinstance(moving_fraction, (int, float)) and (moving_fraction < 0.08 or moving_fraction > 0.9):
+            if operation_type == "SMART_BISECT" and isinstance(moving_fraction, (int, float)) and (moving_fraction < 0.02 or moving_fraction > 0.98):
                 print(f"⚠️ Rejecting implausible split for '{asset_name}'. part_0 face fraction={moving_fraction}; falling back to STATIC.")
                 archetype = "STATIC"
                 operation_type = "NONE"
@@ -2018,7 +2018,7 @@ def validate_animation_plan(plan_json: str = "{}", labels_json: str = "{}", issu
                 if part_id and part_id in parts_metadata:
                     part_meta = parts_metadata[part_id]
                     face_fraction = part_meta.get("face_fraction")
-                    if isinstance(face_fraction, (int, float)) and (face_fraction < 0.08 or face_fraction > 0.9):
+                    if isinstance(face_fraction, (int, float)) and (face_fraction < 0.02 or face_fraction > 0.98):
                         _mark_static(f"hinge part '{part_name}' has implausible face fraction {face_fraction}")
                         break
 
@@ -2230,7 +2230,6 @@ def animate_and_render_mesh(glb_url: str = "", animation_plan_json: str = "{}", 
                 print(f"🔄 Loaded labels mapping from {labels_path}")
         except Exception as e:
             print(f"⚠️ Failed to load labels mapping from {labels_path}: {e}")
-    serialized_labels = json.dumps(labels)
 
     fast_render_mode = _env_flag("FAST_RENDER_MODE", default=False)
     duration_multiplier = 0.85 if fast_render_mode else 2.0
@@ -2319,6 +2318,9 @@ def animate_and_render_mesh(glb_url: str = "", animation_plan_json: str = "{}", 
     seg_json_path = os.path.join(storage_dir, "v2-segmented", "segmentation.json")
     operation_type = "SLICE"
     slicing_plan = {}
+    archetype = "STATIC"
+    split_val = 0.0
+    split_axis = ""
     x_min = x_max = x_extent = 0.0
     y_min = y_max = y_extent = 0.0
     z_min = z_max = z_extent = 0.0
@@ -2329,6 +2331,9 @@ def animate_and_render_mesh(glb_url: str = "", animation_plan_json: str = "{}", 
                 seg_data = json.load(f)
                 operation_type = seg_data.get("operation_type", "SLICE")
                 slicing_plan = seg_data.get("slicing_plan", {})
+                archetype = slicing_plan.get("archetype", "STATIC")
+                split_val = float(seg_data.get("split_val", 0.0) or 0.0)
+                split_axis = str(seg_data.get("split_axis", "") or "")
                 x_min = seg_data.get("x_min", 0.0)
                 x_extent = seg_data.get("x_extent", 0.0)
                 y_min = seg_data.get("y_min", 0.0)
@@ -2337,6 +2342,20 @@ def animate_and_render_mesh(glb_url: str = "", animation_plan_json: str = "{}", 
                 z_extent = seg_data.get("z_extent", 0.0)
         except Exception as e:
             print(f"Warning reading seg metadata in animate_and_render_mesh: {e}")
+
+    if not labels:
+        derived_labels = {}
+        for index, part in enumerate(slicing_plan.get("parts", [])):
+            part_name = part.get("name")
+            if part_name:
+                derived_labels[f"part_{index}"] = part_name
+        if not derived_labels and operation_type == "NONE":
+            derived_labels = {"part_0": "base"}
+        if derived_labels:
+            labels = derived_labels
+            print(f"🔄 Derived labels mapping from slicing plan: {labels}")
+
+    serialized_labels = json.dumps(labels)
 
     # ---- Try Blender animation first (fully preserves textures, PBR materials and generates MP4) ----
     animation_success = False
@@ -2367,6 +2386,9 @@ operation_type = "{operation_type}"
 
 slicing_plan_str = \"\"\"{json.dumps(slicing_plan)}\"\"\"
 slicing_plan = json.loads(slicing_plan_str)
+archetype = {json.dumps(archetype)}
+split_val = {split_val}
+split_axis = {json.dumps(split_axis)}
 
 x_min, x_extent = {x_min}, {x_extent}
 y_min, y_extent = {y_min}, {y_extent}
@@ -2400,9 +2422,14 @@ if primary_obj and os.path.exists(face_ids_path):
             archetype = slicing_plan.get("archetype", "STATIC")
             
             def slice_mesh(obj_to_slice, plane_co, plane_no, clear_inner=False, clear_outer=False):
+                # Transform world plane_co and plane_no to the object's local space
+                inv_mat = obj_to_slice.matrix_world.inverted()
+                local_co = inv_mat @ mathutils.Vector(plane_co)
+                local_no = (inv_mat.transposed().to_3x3() @ mathutils.Vector(plane_no)).normalized()
+                
                 bm = bmesh.new()
                 bm.from_mesh(obj_to_slice.data)
-                bmesh.ops.bisect_plane(bm, geom=bm.verts[:]+bm.edges[:]+bm.faces[:], plane_co=plane_co, plane_no=plane_no, clear_inner=clear_inner, clear_outer=clear_outer)
+                bmesh.ops.bisect_plane(bm, geom=bm.verts[:]+bm.edges[:]+bm.faces[:], plane_co=local_co, plane_no=local_no, clear_inner=clear_inner, clear_outer=clear_outer)
                 bm.to_mesh(obj_to_slice.data)
                 bm.free()
 
@@ -2590,6 +2617,25 @@ def find_object_by_label(label):
             best_match = o
     return best_match
 
+def get_world_bbox(obj):
+    points = []
+    if obj.type == 'MESH':
+        points = [obj.matrix_world @ mathutils.Vector(v) for v in obj.bound_box]
+    else:
+        for child in obj.children_recursive:
+            if child.type == 'MESH':
+                points.extend(child.matrix_world @ mathutils.Vector(v) for v in child.bound_box)
+    if not points:
+        location = obj.matrix_world.translation
+        points = [location]
+    return points
+
+def move_empty_pivot(empty_obj, new_location):
+    child_world = [(child, child.matrix_world.copy()) for child in empty_obj.children]
+    empty_obj.location = mathutils.Vector(new_location)
+    for child, matrix in child_world:
+        child.matrix_world = matrix
+
 # Create parent empty at origin to rotate the entire model cohesively (turntable)
 bpy.ops.object.empty_add(type='PLAIN_AXES', location=(0, 0, 0))
 parent_empty = bpy.context.object
@@ -2671,7 +2717,7 @@ for order in sorted_orders:
             angle_deg = step.get("angle_deg", 0)
             
             # Map pivot dynamically from object bounding box based on archetype and predicted pivot edge
-            bbox = [obj.matrix_world @ mathutils.Vector(v) for v in obj.bound_box]
+            bbox = get_world_bbox(obj)
             min_x = min(v.x for v in bbox)
             max_x = max(v.x for v in bbox)
             min_y = min(v.y for v in bbox)
@@ -2721,6 +2767,8 @@ for order in sorted_orders:
                 bpy.context.view_layer.objects.active = obj
                 bpy.ops.object.origin_set(type='ORIGIN_CURSOR', center='MEDIAN')
                 bpy.context.scene.cursor.location = saved_cursor
+            elif obj.type == 'EMPTY':
+                move_empty_pivot(obj, blender_pivot)
             
             # Inject fake cylinder hinge if requested
             if op == "ROTATE_HINGE" and "hinge_length" in step:
@@ -2818,7 +2866,7 @@ for order in sorted_orders:
             total_deg = speed_deg * duration
             
             # Use geometric center of object as pivot for spin
-            bbox = [obj.matrix_world @ mathutils.Vector(v) for v in obj.bound_box]
+            bbox = get_world_bbox(obj)
             min_x = min(v.x for v in bbox)
             max_x = max(v.x for v in bbox)
             min_y = min(v.y for v in bbox)
@@ -2836,6 +2884,8 @@ for order in sorted_orders:
                 bpy.context.view_layer.objects.active = obj
                 bpy.ops.object.origin_set(type='ORIGIN_CURSOR', center='MEDIAN')
                 bpy.context.scene.cursor.location = saved_cursor
+            elif obj.type == 'EMPTY':
+                move_empty_pivot(obj, blender_pivot)
                 
             obj.rotation_mode = 'XYZ'
             start_euler = obj.rotation_euler.copy()
@@ -2866,7 +2916,7 @@ for order in sorted_orders:
         elif op == "SLIDE":
             axis = step.get("axis", [0, 0, 1])
             distance = step.get("distance", 0.0)
-            translation_vector = mathutils.Vector(axis) * distance
+            translation_vector = mathutils.Vector([axis[0], -axis[2], axis[1]]) * distance
             
             # Insert start keyframe
             obj.keyframe_insert(data_path="location", frame=current_frame)
@@ -2929,6 +2979,12 @@ except Exception as e:
     print(f"Render error: {{e}}")
 
 try:
+    # Keep the turntable sweep in the MP4 preview only; the exported GLB should
+    # contain the articulated part animation without the whole-scene rotation.
+    if parent_empty.animation_data:
+        parent_empty.animation_data_clear()
+    parent_empty.rotation_euler = (0, 0, 0)
+    bpy.context.scene.frame_set(1)
     bpy.ops.export_scene.gltf(filepath="{glb_out_path}", export_format='GLB', export_apply=True)
     print("Blender sequence completed successfully.")
 except Exception as e:
