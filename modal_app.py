@@ -1279,6 +1279,13 @@ def segment_mesh(glb_url: str = "", prompt_tags: str = "", issue_iid: str = None
                 json.dump(face_ids.tolist(), f)
             print(f"💾 Saved face_ids to {face_ids_path}")
 
+            split_axis = ""
+            split_val = None
+            if operation_type == "SMART_BISECT":
+                if archetype in ["HORIZONTAL_SPLIT", "SPIN"]:
+                    split_axis = "Y"
+                    split_val = y_min + (y_split * y_extent)
+
             # 5. Save segmentation metadata
             seg_json_path = os.path.join(seg_dir, "segmentation.json")
             seg_metadata = {
@@ -1291,6 +1298,8 @@ def segment_mesh(glb_url: str = "", prompt_tags: str = "", issue_iid: str = None
                 "slicing_plan": slicing_plan,
                 "plan_confidence": plan_confidence,
                 "plan_reason": plan_reason,
+                "split_axis": split_axis,
+                "split_val": split_val,
                 "x_min": x_min, "x_max": x_max, "x_extent": x_extent,
                 "y_min": y_min, "y_max": y_max, "y_extent": y_extent,
                 "z_min": z_min, "z_max": z_max, "z_extent": z_extent,
@@ -1779,14 +1788,10 @@ def generate_animation_plan(labels_json: str = "{}", asset_name: str = "", issue
     predicted_hinge_axis = gemini_plan.get("hinge_axis", [1, 0, 0])
     predicted_pivot_edge = gemini_plan.get("pivot_edge", "max_z")
 
-    # For HORIZONTAL_SPLIT and SPIN, part_1 is the moving part (lid/head)
-    # For VERTICAL_SPLIT, part_0 is the moving part (door)
-    if gemini_archetype in ["HORIZONTAL_SPLIT", "SPIN"]:
-        moving_part_label = labels.get("part_1", "part_1")  # lid or head
-        parent_part_label = labels.get("part_0", "part_0")  # base
-    else:
-        moving_part_label = labels.get("part_0", "part_0")  # door or default
-        parent_part_label = labels.get("part_1", "part_1")  # frame or default
+    # Current slicing plans assign the moving assembly first and the supporting
+    # assembly second.
+    moving_part_label = labels.get("part_0", "part_0")
+    parent_part_label = labels.get("part_1", "part_1")
 
     if gemini_archetype == "VERTICAL_SPLIT":
         predicted_hinge_axis = gemini_plan.get("hinge_axis", [0, 1, 0])
@@ -2097,7 +2102,7 @@ def validate_animation_plan(plan_json: str = "{}", labels_json: str = "{}", issu
                             else:
                                 target_z = max(pz_min, base_pz_min)
                             
-                            new_pivot = [target_x, -target_z, target_y]
+                            new_pivot = [target_x, target_y, target_z]
                             new_axis = [1.0, 0.0, 0.0]
                             target_angle = 45 if close_motion else -60
                             if step.get("angle_deg", 0) != target_angle:
@@ -2111,15 +2116,15 @@ def validate_animation_plan(plan_json: str = "{}", labels_json: str = "{}", issu
                             target_y = (py_min + py_max) / 2.0
                             target_z = max(pz_min, base_pz_min)
                             
-                            new_pivot = [target_x, -target_z, target_y]
-                            new_axis = [0.0, 0.0, 1.0] # Map Trimesh Y to Blender Z
+                            new_pivot = [target_x, target_y, target_z]
+                            new_axis = [0.0, 1.0, 0.0]
                             
                         else: # Trimesh Z (Roll)
                             target_x = px_min
                             target_y = (py_min + py_max) / 2.0
                             target_z = max(pz_min, base_pz_min)
-                            new_pivot = [target_x, -target_z, target_y]
-                            new_axis = [0.0, -1.0, 0.0]
+                            new_pivot = [target_x, target_y, target_z]
+                            new_axis = [0.0, 0.0, 1.0]
                         
                         step["pivot"] = new_pivot
                         step["axis"] = new_axis
