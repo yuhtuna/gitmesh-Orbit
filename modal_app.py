@@ -2193,7 +2193,7 @@ def validate_animation_plan(plan_json: str = "{}", labels_json: str = "{}", issu
                         else:
                             axis = [1.0, 0.0, 0.0]
 
-                        # Trimesh Y is up, Z is front. Blender Z is up, Y is back (-Y is front)
+                        # Keep pivot and axis coordinates in Trimesh space
                         if axis[0] > 0.5: # Trimesh X (Pitch) -> e.g. Chest Lid
                             target_x = (px_min + px_max) / 2.0
                             target_y = split_val if (split_axis == "Y" and split_val is not None) else py_min
@@ -2266,6 +2266,22 @@ def validate_animation_plan(plan_json: str = "{}", labels_json: str = "{}", issu
     }
     with open(report_path, "w") as f:
         json.dump(report, f, indent=2)
+ 
+    # Also overwrite the animation_plan.json with the corrected plan
+    plan_path = os.path.join(plan_dir, "animation_plan.json")
+    try:
+        with open(plan_path, "w") as f:
+            json.dump(plan, f, indent=2)
+        print(f"💾 Saved auto-corrected animation plan to {plan_path}")
+    except Exception as e:
+        print(f"⚠️ Failed to save auto-corrected animation plan: {e}")
+        
+    if storage_volume and hasattr(storage_volume, "commit"):
+        try:
+            storage_volume.commit()
+            print("💾 Storage volume committed successfully after validation.")
+        except Exception as e:
+            print(f"⚠️ Warning committing storage volume: {e}")
 
     # Post validation result
     if passed:
@@ -2314,6 +2330,13 @@ def animate_and_render_mesh(glb_url: str = "", animation_plan_json: str = "{}", 
     import sys
     import time
     import tempfile
+
+    if storage_volume and hasattr(storage_volume, "reload"):
+        try:
+            storage_volume.reload()
+            print("🔄 Storage volume reloaded.")
+        except Exception as e:
+            print(f"⚠️ Warning reloading storage volume: {e}")
 
     storage_dir = "/mnt/data/assets"
     os.makedirs(storage_dir, exist_ok=True)
@@ -2760,8 +2783,10 @@ def move_empty_pivot(empty_obj, new_location):
         empty_obj.location = empty_obj.parent.matrix_world.inverted() @ target_world
     else:
         empty_obj.location = target_world
+    bpy.context.view_layer.update()
     for child, matrix in child_world:
         child.matrix_world = matrix
+    bpy.context.view_layer.update()
 
 # Create parent empty at origin to rotate the entire model cohesively (turntable)
 bpy.ops.object.empty_add(type='PLAIN_AXES', location=(0, 0, 0))
@@ -2843,46 +2868,8 @@ for order in sorted_orders:
             pivot_edge = step.get("pivot_edge", "max_z")
             angle_deg = step.get("angle_deg", 0)
             
-            # Map pivot dynamically from object bounding box based on archetype and predicted pivot edge
-            bbox = get_world_bbox(obj)
-            min_x = min(v.x for v in bbox)
-            max_x = max(v.x for v in bbox)
-            min_y = min(v.y for v in bbox)
-            max_y = max(v.y for v in bbox)
-            min_z = min(v.z for v in bbox)
-            max_z = max(v.z for v in bbox)
-            
-            # Trimesh Z (depth) maps to Blender Y
-            # Trimesh X (width) maps to Blender X
-            # Trimesh Y (height) maps to Blender Z
-            
-            if archetype == "HORIZONTAL_SPLIT":
-                edge_val_x = (min_x + max_x) / 2.0
-                edge_val_z = max_z
-                edge_val_y = split_val if 'split_val' in locals() else (min_y + max_y) / 2.0 # Default hinge height is split plane
-                
-                if pivot_edge == "min_z": edge_val_z = min_z
-                elif pivot_edge == "max_z": edge_val_z = max_z
-                elif pivot_edge == "min_x": edge_val_x = min_x
-                elif pivot_edge == "max_x": edge_val_x = max_x
-                elif pivot_edge == "min_y": edge_val_y = min_y
-                elif pivot_edge == "max_y": edge_val_y = max_y
-                
-                blender_pivot = [edge_val_x, -edge_val_z, edge_val_y]
-            elif archetype == "VERTICAL_SPLIT":
-                edge_val_x = min_x
-                edge_val_z = max_z
-                edge_val_y = (min_y + max_y) / 2.0
-                
-                if pivot_edge == "min_x": edge_val_x = min_x
-                elif pivot_edge == "max_x": edge_val_x = max_x
-                elif pivot_edge == "min_z": edge_val_z = min_z
-                elif pivot_edge == "max_z": edge_val_z = max_z
-                
-                blender_pivot = [edge_val_x, -edge_val_z, edge_val_y]
-            else:
-                # Fallback mapping
-                blender_pivot = [pivot[0], -pivot[2], pivot[1]]
+            # Map pivot dynamically from step's validated pivot coordinate (Trimesh space to Blender space: X->X, Y->Z, Z->-Y)
+            blender_pivot = [pivot[0], -pivot[2], pivot[1]]
             
             # Relocate object's origin to pivot coordinate in Blender if it's a mesh
             if obj.type == 'MESH':
@@ -3125,7 +3112,7 @@ try:
         parent_empty.animation_data_clear()
     parent_empty.rotation_euler = (0, 0, 0)
     bpy.context.scene.frame_set(1)
-    bpy.ops.export_scene.gltf(filepath="{glb_out_path}", export_format='GLB', export_apply=True)
+    bpy.ops.export_scene.gltf(filepath="{glb_out_path}", export_format='GLB', export_apply=True, export_animations=True, export_optimize_animation_size=False)
     print("Blender sequence completed successfully.")
 except Exception as e:
     print(f"Export GLB error: {{e}}")
@@ -3447,6 +3434,14 @@ def run_full_pipeline(prompt: str, issue_desc: str = "", issue_iid: str = None, 
     """
     print(f"🏁 [GitMesh Pipeline Orchestrator] Starting 10-stage remote pipeline for: '{prompt}' (Issue #{issue_iid or 'N/A'})")
 
+    def _commit_volume():
+        if storage_volume and hasattr(storage_volume, "commit"):
+            try:
+                storage_volume.commit()
+                print("💾 Storage volume changes committed successfully.")
+            except Exception as e:
+                print(f"⚠️ Warning committing storage volume: {e}")
+
     # Propagate performance toggles to local stage invocations in this container.
     os.environ["FAST_TRELLIS_MODE"] = str(fast_trellis_mode).strip().lower()
     os.environ["FAST_RENDER_MODE"] = str(fast_render_mode).strip().lower()
@@ -3454,30 +3449,37 @@ def run_full_pipeline(prompt: str, issue_desc: str = "", issue_iid: str = None, 
     # 1. Reference Image
     print("📷 [Stage 2] Running generate_reference_image...")
     generate_reference_image.local(prompt, issue_desc=issue_desc, issue_iid=issue_iid, gitlab_token=gitlab_token)
+    _commit_volume()
     
     # 2. 3D Mesh
     print("🧊 [Stage 3] Running generate_3d_mesh...")
     generate_3d_mesh.local(prompt, style="lowpoly", issue_desc=issue_desc, issue_iid=issue_iid, gitlab_token=gitlab_token)
+    _commit_volume()
     
     # 3. Validate GLB
     print("🔍 [Stage 3b] Running validate_glb...")
     validate_glb.local(issue_iid=issue_iid, gitlab_token=gitlab_token)
+    _commit_volume()
     
     # 4. Segment Mesh
     print("✂️ [Stage 4] Running segment_mesh...")
     segment_mesh.local(issue_iid=issue_iid, gitlab_token=gitlab_token)
+    _commit_volume()
     
     # 5. Label parts
     print("🏷️ [Stage 7] Running label_parts...")
     label_parts.local(asset_name=prompt, issue_iid=issue_iid, gitlab_token=gitlab_token)
+    _commit_volume()
     
     # 6. Animation plan
     print("🎬 [Stage 8] Running generate_animation_plan...")
     generate_animation_plan.local(asset_name=prompt, issue_iid=issue_iid, gitlab_token=gitlab_token)
+    _commit_volume()
     
     # 7. Validate animation plan
     print("✅ [Stage 9] Running validate_animation_plan...")
     validate_animation_plan.local(issue_iid=issue_iid, gitlab_token=gitlab_token)
+    _commit_volume()
     
     # 8. Animate and render
     print("🎬 [Stage 10] Running animate_and_render_mesh...")
