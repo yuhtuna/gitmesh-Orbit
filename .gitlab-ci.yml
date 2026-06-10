@@ -133,8 +133,44 @@ run_gitmesh_pipeline:
 
     echo "Running GitMesh remote preflight checks..."
     require_var GITLAB_API_TOKEN
-    require_var ISSUE_IID
+
+    # Multi-project routing: when triggered on behalf of an onboarded target
+    # project, route GitLab API calls (progress comments, auto-close) to that
+    # project. The compute stages additionally resolve the target's API token
+    # from the registry at runtime. Defaults to the engine project otherwise.
+    if [ -n "${TARGET_PROJECT_ID:-}" ]; then
+      TARGET_BASE="${TARGET_GITLAB_URL:-https://gitlab.com}"
+      GITLAB_API_URL="${TARGET_BASE%/}/api/v4/projects/${TARGET_PROJECT_ID}"
+      echo "Multi-project run: routing GitLab API to ${GITLAB_API_URL}"
+    fi
+
+    if [ -z "${ISSUE_IID:-}" ]; then
+      echo "ISSUE_IID not provided. Auto-selecting latest open MeshGen issue..."
+      ISSUE_IID="$(
+        curl --silent --show-error --fail \
+          --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" \
+          "${GITLAB_API_URL}/issues?state=opened&order_by=updated_at&sort=desc&per_page=50" \
+        | python -c "import json,sys,re; issues=json.load(sys.stdin); mesh=[i for i in issues if re.match(r'^meshgen:', (i.get('title') or ''), re.I)]; pick=(mesh[0] if mesh else (issues[0] if issues else {})); print(pick.get('iid',''))"
+      )"
+    fi
+
+    if [ -z "${ISSUE_IID:-}" ]; then
+      echo "Unable to resolve ISSUE_IID automatically. Provide ISSUE_IID explicitly or open a MeshGen issue first."
+      exit 1
+    fi
+
+    if [ -z "${ISSUE_TITLE:-}" ] || [ "${ISSUE_TITLE}" = "Fallback Prompt" ]; then
+      echo "ISSUE_TITLE not provided (or fallback). Fetching title for issue #${ISSUE_IID}..."
+      ISSUE_TITLE="$(
+        curl --silent --show-error --fail \
+          --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" \
+          "${GITLAB_API_URL}/issues/${ISSUE_IID}" \
+        | python -c "import json,sys,re; t=(json.load(sys.stdin).get('title') or '').strip(); t=re.sub(r'^meshgen:\s*','',t,flags=re.I); print(t)"
+      )"
+    fi
+
     require_var ISSUE_TITLE
+    echo "Issue context resolved: ISSUE_IID=${ISSUE_IID}, ISSUE_TITLE=${ISSUE_TITLE}"
 
     # Preset selector for runtime speed/quality trade-offs.
     # Set USE_CUSTOM_FLAGS=true to bypass this mapping and control flags directly.
@@ -173,16 +209,6 @@ run_gitmesh_pipeline:
 
     echo "Runtime profile: QUALITY_MODE=${QUALITY_MODE} (USE_CUSTOM_FLAGS=${USE_CUSTOM_FLAGS})"
     echo "Resolved flags: single_call=${USE_SINGLE_CALL_PIPELINE}, adk=${USE_ADK_ORCHESTRATOR}, fast_trellis=${USE_FAST_TRELLIS_MODE}, fast_render=${USE_FAST_RENDER_MODE}, skip_secret_preflight=${SKIP_MODAL_SECRET_PREFLIGHT}, diagnostics=${ENABLE_NETWORK_DIAGNOSTICS}"
-
-    # Multi-project routing: when triggered on behalf of an onboarded target
-    # project, route GitLab API calls (progress comments, auto-close) to that
-    # project. The compute stages additionally resolve the target's API token
-    # from the registry at runtime. Defaults to the engine project otherwise.
-    if [ -n "${TARGET_PROJECT_ID:-}" ]; then
-      TARGET_BASE="${TARGET_GITLAB_URL:-https://gitlab.com}"
-      GITLAB_API_URL="${TARGET_BASE%/}/api/v4/projects/${TARGET_PROJECT_ID}"
-      echo "Multi-project run: routing GitLab API to ${GITLAB_API_URL}"
-    fi
 
     if [ "${PIPELINE_DRY_RUN:-false}" != "true" ]; then
       require_var MODAL_TOKEN_ID
