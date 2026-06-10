@@ -176,72 +176,34 @@ run_gitmesh_pipeline:
     # Single-flight guard: allow only one active pipeline per issue context.
     # Keep the oldest active pipeline and exit newer duplicates cleanly.
     if [ "${ALLOW_DUPLICATE_RUNS:-false}" != "true" ]; then
-      DUPLICATE_DETECTED="$(
-python - <<'PY'
-import json
-import os
-import urllib.request
+      KEEPER_PIPELINE_ID=""
+      ACTIVE_PIPELINE_IDS="$({
+        for status in pending running; do
+          curl --silent --show-error --fail \
+            --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" \
+            "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/pipelines?status=${status}&order_by=id&sort=asc&per_page=60" \
+          | python -c "import json,sys; d=json.load(sys.stdin); d=d if isinstance(d,list) else []; print(' '.join(str(int(p.get('id',0) or 0)) for p in d if isinstance(p,dict) and int(p.get('id',0) or 0)))"
+        done
+      } | tr ' ' '\n' | sed '/^$/d' | sort -n | uniq)"
 
-token = os.environ.get("GITLAB_API_TOKEN", "")
-issue_iid = str(os.environ.get("ISSUE_IID", "")).strip()
-target_project_id = str(os.environ.get("TARGET_PROJECT_ID", "")).strip()
-ci_api = os.environ.get("CI_API_V4_URL", "https://gitlab.com/api/v4").rstrip("/")
-project_id = os.environ.get("CI_PROJECT_ID", "")
-self_id = int(os.environ.get("CI_PIPELINE_ID", "0") or "0")
+      for pid in ${ACTIVE_PIPELINE_IDS}; do
+        MATCH="$(
+          curl --silent --show-error --fail \
+            --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" \
+            "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/pipelines/${pid}/variables" \
+          | python -c "import json,sys,os; issue=str(os.environ.get('ISSUE_IID','')).strip(); target=str(os.environ.get('TARGET_PROJECT_ID','')).strip(); d=json.load(sys.stdin); d=d if isinstance(d,list) else []; v={str(i.get('key','')):str(i.get('value','')) for i in d if isinstance(i,dict)}; print('1' if (str(v.get('ISSUE_IID','')).strip()==issue and str(v.get('TARGET_PROJECT_ID','')).strip()==target) else '0')"
+        )"
+        if [ "${MATCH}" = "1" ]; then
+          if [ -z "${KEEPER_PIPELINE_ID}" ] || [ "${pid}" -lt "${KEEPER_PIPELINE_ID}" ]; then
+            KEEPER_PIPELINE_ID="${pid}"
+          fi
+        fi
+      done
 
-if not (token and issue_iid and project_id and self_id):
-    print("")
-    raise SystemExit(0)
-
-base = f"{ci_api}/projects/{project_id}"
-headers = {"PRIVATE-TOKEN": token}
-
-def get_json(url: str):
-    req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
-active_ids = []
-for status in ("pending", "running"):
-    try:
-        pipelines = get_json(f"{base}/pipelines?status={status}&order_by=id&sort=asc&per_page=60")
-    except Exception:
-        pipelines = []
-    for p in pipelines:
-        pid = int(p.get("id", 0) or 0)
-        if pid:
-            active_ids.append(pid)
-
-active_ids = sorted(set(active_ids))
-
-matching_ids = []
-for pid in active_ids:
-    try:
-        vars_list = get_json(f"{base}/pipelines/{pid}/variables")
-    except Exception:
-        continue
-    vmap = {str(v.get("key", "")): str(v.get("value", "")) for v in vars_list if isinstance(v, dict)}
-    same_issue = str(vmap.get("ISSUE_IID", "")).strip() == issue_iid
-    same_target = str(vmap.get("TARGET_PROJECT_ID", "")).strip() == target_project_id
-    if same_issue and same_target:
-        matching_ids.append(pid)
-
-if not matching_ids:
-    print("")
-    raise SystemExit(0)
-
-keeper = min(matching_ids)
-if self_id != keeper:
-    print(str(keeper))
-else:
-    print("")
-PY
-      )"
-
-      if [ -n "${DUPLICATE_DETECTED}" ]; then
-        echo "Duplicate pipeline detected for issue #${ISSUE_IID}. Keeping pipeline ${DUPLICATE_DETECTED}, exiting ${CI_PIPELINE_ID}."
+      if [ -n "${KEEPER_PIPELINE_ID}" ] && [ "${CI_PIPELINE_ID}" != "${KEEPER_PIPELINE_ID}" ]; then
+        echo "Duplicate pipeline detected for issue #${ISSUE_IID}. Keeping pipeline ${KEEPER_PIPELINE_ID}, exiting ${CI_PIPELINE_ID}."
         curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" \
-          --form "body=⚠️ Duplicate pipeline suppressed. Keeping pipeline #${DUPLICATE_DETECTED}; exiting #${CI_PIPELINE_ID}." \
+          --form "body=⚠️ Duplicate pipeline suppressed. Keeping pipeline #${KEEPER_PIPELINE_ID}; exiting #${CI_PIPELINE_ID}." \
           "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes" || true
         exit 0
       fi
