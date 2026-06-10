@@ -92,11 +92,12 @@ def _get_image_model_candidates() -> list[str]:
     Returns preferred image generation model IDs from newest/cost-effective to legacy fallback.
     Override first choice with IMAGE_MODEL env var.
     """
-    preferred = os.environ.get("IMAGE_MODEL", "gemini-3.1-flash-image").strip()
+    preferred = os.environ.get("IMAGE_MODEL", "imagen-4.0-fast-generate-001").strip()
     candidates = [
         preferred,
-        "gemini-3.5-flash",
         "imagen-4.0-fast-generate-001",
+        "gemini-3.1-flash-image",
+        "gemini-3.5-flash",
         "imagen-4.0-generate-001",
         "imagen-3.0-generate-002",
         "imagen-3.0-generate-001",
@@ -2341,8 +2342,8 @@ def animate_and_render_mesh(glb_url: str = "", animation_plan_json: str = "{}", 
             print(f"⚠️ Failed to load labels mapping from {labels_path}: {e}")
 
     fast_render_mode = _env_flag("FAST_RENDER_MODE", default=False)
-    duration_multiplier = 0.85 if fast_render_mode else 2.0
-    hold_frames = 4 if fast_render_mode else 24
+    duration_multiplier = 0.85 if fast_render_mode else 1.5
+    hold_frames = 4 if fast_render_mode else 14
     render_fps = 20 if fast_render_mode else 24
 
     # Calculate total frames in the outer script to avoid NameError
@@ -3084,7 +3085,7 @@ for action in bpy.data.actions:
 
 bpy.context.scene.render.engine = 'BLENDER_EEVEE'
 try:
-    bpy.context.scene.eevee.taa_render_samples = {6 if fast_render_mode else 16}
+    bpy.context.scene.eevee.taa_render_samples = {6 if fast_render_mode else 10}
 except:
     pass
 bpy.context.scene.render.resolution_x = {320 if fast_render_mode else 512}
