@@ -1774,6 +1774,9 @@ def generate_animation_plan(labels_json: str = "{}", asset_name: str = "", issue
     predicted_hinge_axis = gemini_plan.get("hinge_axis", [1, 0, 0])
     predicted_pivot_edge = gemini_plan.get("pivot_edge", "max_z")
 
+    moving_part_label = labels.get("part_0", "part_0")
+    parent_part_label = labels.get("part_1", "part_1")
+
     if gemini_archetype == "VERTICAL_SPLIT":
         predicted_hinge_axis = gemini_plan.get("hinge_axis", [0, 1, 0])
         print("🎬 [Template] Generating VERTICAL_SPLIT (Door) animation template...")
@@ -1781,7 +1784,7 @@ def generate_animation_plan(labels_json: str = "{}", asset_name: str = "", issue
             "asset_name": asset_name,
             "steps": [
                 {
-                    "part": "part_0", # door panel
+                    "part": moving_part_label, # door panel
                     "op": "ROTATE_HINGE",
                     "axis": predicted_hinge_axis,
                     "pivot": [0, 0, 0], 
@@ -1789,7 +1792,7 @@ def generate_animation_plan(labels_json: str = "{}", asset_name: str = "", issue
                     "angle_deg": -60,
                     "duration_s": 1.5,
                     "order": 1,
-                    "parent": "part_1", # frame
+                    "parent": parent_part_label, # frame
                     "hinge_length": 0.4,
                     "hinge_radius": 0.02
                 }
@@ -1801,7 +1804,7 @@ def generate_animation_plan(labels_json: str = "{}", asset_name: str = "", issue
             "asset_name": asset_name,
             "steps": [
                 {
-                    "part": "part_0", # lid
+                    "part": moving_part_label, # lid
                     "op": "ROTATE_HINGE",
                     "axis": predicted_hinge_axis,
                     "pivot": [0, 0, 0],
@@ -1809,7 +1812,7 @@ def generate_animation_plan(labels_json: str = "{}", asset_name: str = "", issue
                     "angle_deg": -60,
                     "duration_s": 1.5,
                     "order": 1,
-                    "parent": "part_1", # base
+                    "parent": parent_part_label, # base
                     "hinge_length": 0.4,
                     "hinge_radius": 0.02
                 }
@@ -1822,13 +1825,13 @@ def generate_animation_plan(labels_json: str = "{}", asset_name: str = "", issue
             "asset_name": asset_name,
             "steps": [
                 {
-                    "part": "part_0", # head/blades
+                    "part": moving_part_label, # head/blades
                     "op": "CONTINUOUS_SPIN",
                     "axis": predicted_spin_axis,
                     "speed_deg_per_sec": 720,
                     "duration_s": 3.0,
                     "order": 1,
-                    "parent": "part_1" # base
+                    "parent": parent_part_label # base
                 }
             ]
         }
@@ -3041,22 +3044,15 @@ except Exception as e:
             else:
                 mesh = _create_procedural_chest_mesh()
 
-            # For turntable rotation fallback in trimesh
+            # Export a single clean copy of the original/fallback mesh.
+            # (We cannot export a proper glTF keyframe animation from Trimesh,
+            # so exporting the clean static mesh is much better than exporting 24 rotated copies).
+            mesh.export(glb_out_path)
+            animation_success = True
+            print(f"✅ Trimesh fallback mesh exported to {glb_out_path}")
+
             frames = 16 if fast_render_mode else 24
             rotation_y = 360
-
-            scene = trimesh.Scene()
-            for frame in range(frames):
-                angle = math.radians((frame / frames) * rotation_y)
-                rotation = trimesh.transformations.rotation_matrix(angle, [0, 1, 0])
-                mesh_copy = mesh.copy()
-                mesh_copy.apply_transform(rotation)
-                scene.add_geometry(mesh_copy, node_name=f"frame_{frame}")
-
-            scene.export(glb_out_path)
-            animation_success = True
-            print(f"✅ Trimesh animation exported to {glb_out_path}")
-
             if _render_turntable_mp4(mesh, mp4_out_path, frames=frames, rotation_y=rotation_y):
                 print(f"📹 Turntable preview MP4 rendered at {mp4_out_path}")
             else:
