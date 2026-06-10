@@ -1138,17 +1138,16 @@ def segment_mesh(glb_url: str = "", prompt_tags: str = "", issue_iid: str = None
             elif gemini_archetype in ["HORIZONTAL_SPLIT", "SPIN"]:
                 archetype = gemini_archetype
                 operation_type = "SMART_BISECT"
-                y_split = gemini_plan.get("y_split_ratio", 0.55 if archetype == "HORIZONTAL_SPLIT" else 0.6)
+                y_split = gemini_plan.get("y_split_ratio", 0.45 if archetype == "HORIZONTAL_SPLIT" else 0.6)
                 try:
                     y_split = float(y_split)
                 except (TypeError, ValueError):
-                    y_split = 0.55 if archetype == "HORIZONTAL_SPLIT" else 0.6
+                    y_split = 0.45 if archetype == "HORIZONTAL_SPLIT" else 0.6
                 if any(k in asset_name.lower() for k in ["laptop", "phone", "fold", "flip", "clamshell"]):
-                    y_split = max(0.08, min(0.55, y_split))
+                    y_split = max(0.08, min(0.45, y_split))
                 elif archetype == "HORIZONTAL_SPLIT":
                     y_split = max(0.35, min(0.75, y_split))
-                else:
-                    y_split = max(0.35, min(0.75, y_split))
+                
                 slicing_plan = {
                     "operation_type": operation_type,
                     "archetype": archetype,
@@ -1181,12 +1180,13 @@ def segment_mesh(glb_url: str = "", prompt_tags: str = "", issue_iid: str = None
             parts_plan = slicing_plan.get("parts", [])
             
             face_centers = mesh.triangles.mean(axis=1)
-            face_ids = np.zeros(len(mesh.faces), dtype=int) - 1 # default unassigned is -1
+            # Default unassigned is -1
+            face_ids = np.full(len(mesh.faces), -1, dtype=int)
             
             label_mapping = {}
             unique_ids = []
             if operation_type in ["SLICE", "SMART_BISECT"] and len(parts_plan) > 0:
-                # First pass: assign bounded parts
+                # First pass: assign explicit bounded parts (e.g., lid)
                 for i, part in enumerate(parts_plan):
                     if "x_range_ratio" in part:
                         rx = part["x_range_ratio"]
@@ -1203,10 +1203,10 @@ def segment_mesh(glb_url: str = "", prompt_tags: str = "", issue_iid: str = None
                     label_mapping[f"part_{i}"] = part["name"]
                     unique_ids.append(i)
                 
-                # Second pass: assign inverse parts
+                # Second pass: assign inverse parts (usually the base)
                 for i, part in enumerate(parts_plan):
                     if "inverse_of" in part:
-                        # Just grab all remaining unassigned faces
+                        # Grab all remaining unassigned faces
                         face_ids[face_ids == -1] = i
             else:
                 # If NONE, just assign all to part 0
@@ -1214,8 +1214,9 @@ def segment_mesh(glb_url: str = "", prompt_tags: str = "", issue_iid: str = None
                 unique_ids = [0]
                 label_mapping["part_0"] = "base"
             
-            # Any still unassigned gets part 0
-            face_ids[face_ids == -1] = 0
+            # Catch-all: Ensure no -1s remain. Default to part_1 (usually the base) if possible, else part_0.
+            default_part = 1 if 1 in unique_ids else 0
+            face_ids[face_ids == -1] = default_part
 
             total_faces = len(face_ids)
             for part_id in unique_ids:
