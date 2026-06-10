@@ -179,6 +179,13 @@ def _resolve_gitlab_target(passed_token: str):
     return base_url, (target_id.strip() if target_id else None), token
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    v = os.environ.get(name, "").strip().lower()
+    if not v:
+        return default
+    return v in ("1", "true", "yes", "y", "on")
+
+
 def _get_gitlab_project_id() -> Optional[str]:
     project_id = (TARGET_PROJECT_ID or GITLAB_PROJECT_ID).strip()
     if not project_id:
@@ -698,15 +705,21 @@ def generate_3d_mesh(prompt: str, style: str = "lowpoly", issue_desc: str = "", 
 
         print(f"🎨 [Modal GPU Serverless] Executing 3D sparse point cloud generation and optimization loops for '{prompt}'...")
         # Execute actual inference pipeline with local parameters
+        fast_trellis_mode = _env_flag("FAST_TRELLIS_MODE", default=False)
+        sparse_steps = 6 if fast_trellis_mode else 12
+        slat_steps = 6 if fast_trellis_mode else 12
+        simplify_ratio = 0.97 if fast_trellis_mode else 0.95
+        texture_size = 640 if fast_trellis_mode else 1024
+
         outputs = pipeline.run(
             img,
             seed=42,
             sparse_structure_sampler_params={
-                "steps": 12,
+                "steps": sparse_steps,
                 "cfg_strength": 7.5,
             },
             slat_sampler_params={
-                "steps": 12,
+                "steps": slat_steps,
                 "cfg_strength": 3.0,
             }
         )
@@ -716,8 +729,8 @@ def generate_3d_mesh(prompt: str, style: str = "lowpoly", issue_desc: str = "", 
         glb = postprocessing_utils.to_glb(
             outputs['gaussian'][0],
             outputs['mesh'][0],
-            simplify=0.95,
-            texture_size=1024
+            simplify=simplify_ratio,
+            texture_size=texture_size
         )
         glb.export(glb_path)
         print("✅ Trellis pipeline local module ran successfully on GPU.")
@@ -2218,6 +2231,11 @@ def animate_and_render_mesh(glb_url: str = "", animation_plan_json: str = "{}", 
             print(f"⚠️ Failed to load labels mapping from {labels_path}: {e}")
     serialized_labels = json.dumps(labels)
 
+    fast_render_mode = _env_flag("FAST_RENDER_MODE", default=False)
+    duration_multiplier = 0.85 if fast_render_mode else 2.0
+    hold_frames = 4 if fast_render_mode else 24
+    render_fps = 20 if fast_render_mode else 24
+
     # Calculate total frames in the outer script to avoid NameError
     from collections import defaultdict
     order_groups = defaultdict(list)
@@ -2229,11 +2247,10 @@ def animate_and_render_mesh(glb_url: str = "", animation_plan_json: str = "{}", 
     for order in sorted_orders:
         steps = order_groups[order]
         max_duration_s = max(step.get("duration_s", 0.8) for step in steps)
-        max_duration_s *= 2.0 # Slow down animation by half
-        duration_frames = int(max_duration_s * 24)
+        max_duration_s *= duration_multiplier
+        duration_frames = int(max_duration_s * render_fps)
         current_frame += duration_frames
-        
-    hold_frames = 24
+
     close_frames = current_frame - 1
     total_frames = current_frame + hold_frames + close_frames
 
@@ -2595,8 +2612,10 @@ for obj in bpy.data.objects:
         obj.matrix_parent_inverse = parent_empty.matrix_world.inverted()
 
 # 3. Process animation steps sequentially
-fps = 24
+fps = {render_fps}
 current_frame = 1
+duration_multiplier = {duration_multiplier}
+hold_frame_count = {hold_frames}
 
 # Group steps by order
 from collections import defaultdict
@@ -2612,17 +2631,17 @@ opening_end_frame = 1
 for order in sorted_orders:
     steps = order_groups[order]
     max_duration_s = max(step.get("duration_s", 0.8) for step in steps)
-    max_duration_s *= 2.0 # Slow down animation by half
+    max_duration_s *= duration_multiplier
     duration_frames = int(max_duration_s * fps)
     opening_end_frame += duration_frames
 
 global_hold_start = opening_end_frame
-global_hold_end = global_hold_start + 24
+global_hold_end = global_hold_start + hold_frame_count
 
 for order in sorted_orders:
     steps = order_groups[order]
     max_duration_s = max(step.get("duration_s", 0.8) for step in steps)
-    max_duration_s *= 2.0 # Slow down animation by half
+    max_duration_s *= duration_multiplier
     duration_frames = int(max_duration_s * fps)
     end_frame = current_frame + duration_frames
     
@@ -2794,7 +2813,7 @@ for order in sorted_orders:
             axis = step.get("axis", [0, 0, 1])
             speed_deg = step.get("speed_deg_per_sec", 360)
             duration = step.get("duration_s", 2.0)
-            total_frames = int(duration * 24)
+            total_frames = int(duration * fps)
             total_deg = speed_deg * duration
             
             # Use geometric center of object as pivot for spin
@@ -2888,11 +2907,11 @@ for action in bpy.data.actions:
 
 bpy.context.scene.render.engine = 'BLENDER_EEVEE'
 try:
-    bpy.context.scene.eevee.taa_render_samples = 16
+    bpy.context.scene.eevee.taa_render_samples = {6 if fast_render_mode else 16}
 except:
     pass
-bpy.context.scene.render.resolution_x = 512
-bpy.context.scene.render.resolution_y = 512
+bpy.context.scene.render.resolution_x = {320 if fast_render_mode else 512}
+bpy.context.scene.render.resolution_y = {320 if fast_render_mode else 512}
 bpy.context.scene.render.resolution_percentage = 100
 
 # EEVEE uses standard lighting, we add a light instead of overriding shading
@@ -2966,7 +2985,7 @@ except Exception as e:
                 mesh = _create_procedural_chest_mesh()
 
             # For turntable rotation fallback in trimesh
-            frames = 24
+            frames = 16 if fast_render_mode else 24
             rotation_y = 360
 
             scene = trimesh.Scene()
@@ -3215,12 +3234,17 @@ def list_hunyuan_files(google_access_token: str = None):
     secrets=[modal.Secret.from_name("gitmesh-keys")] if modal else [],
     volumes={"/mnt/data": storage_volume} if storage_volume else {}
 )
-def run_full_pipeline(prompt: str, issue_desc: str = "", issue_iid: str = None, gitlab_token: str = None):
+def run_full_pipeline(prompt: str, issue_desc: str = "", issue_iid: str = None, gitlab_token: str = None,
+                      fast_trellis_mode: str = "false", fast_render_mode: str = "false"):
     """Orchestrates the entire 10-stage technical art asset generation pipeline in a single container.
     This bypasses Modal's AppCreate rate limits and significantly improves execution speed by keeping
     the models loaded and caching files locally.
     """
     print(f"🏁 [GitMesh Pipeline Orchestrator] Starting 10-stage remote pipeline for: '{prompt}' (Issue #{issue_iid or 'N/A'})")
+
+    # Propagate performance toggles to local stage invocations in this container.
+    os.environ["FAST_TRELLIS_MODE"] = str(fast_trellis_mode).strip().lower()
+    os.environ["FAST_RENDER_MODE"] = str(fast_render_mode).strip().lower()
     
     # 1. Reference Image
     print("📷 [Stage 2] Running generate_reference_image...")

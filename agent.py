@@ -132,6 +132,7 @@ async def run_remote_adk_orchestrator() -> int:
     issue_iid = _env_value("ISSUE_IID")
     gitlab_token = _env_value("GITLAB_API_TOKEN")
     auto_close_issue = os.getenv("AUTO_CLOSE_ISSUE", "true").strip().lower() == "true"
+    use_single_call_pipeline = os.getenv("USE_SINGLE_CALL_PIPELINE", "false").strip().lower() == "true"
 
     logical_agents = [
         ("Request Intake Agent", "Normalize GitLab issue context and initialize run state."),
@@ -186,6 +187,37 @@ async def run_remote_adk_orchestrator() -> int:
     secret_list = _run_modal_command(["modal", "secret", "list"], "Modal Secret Preflight", timeout=300)
     if "gitmesh-keys" not in secret_list:
         raise RuntimeError("Modal secret 'gitmesh-keys' was not found. Run setup_remote.ps1 or bootstrap_modal_remote first.")
+
+    if use_single_call_pipeline:
+        _post_gitlab_issue_comment(
+            issue_iid,
+            gitlab_token,
+            "⚡ Single-call mode enabled: running pipeline in one Modal container to reduce orchestration overhead.",
+        )
+        _run_modal_command(
+            [
+                "modal",
+                "run",
+                "modal_app.py::run_full_pipeline",
+                "--prompt",
+                issue_title,
+                "--issue-desc",
+                issue_desc,
+                "--issue-iid",
+                issue_iid,
+                "--gitlab-token",
+                gitlab_token,
+            ],
+            "Single-Call Pipeline Agent",
+        )
+        _post_gitlab_issue_comment(
+            issue_iid,
+            gitlab_token,
+            f"🏁 **ADK-Orchestrated Pipeline Complete**\nAll role agents finished for: {issue_title}",
+        )
+        if auto_close_issue:
+            _close_gitlab_issue(issue_iid, gitlab_token)
+        return 0
 
     stage_commands = [
         (

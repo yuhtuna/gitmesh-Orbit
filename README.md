@@ -69,9 +69,16 @@ LLM_PROVIDER=vertex
 IMAGE_MODEL=gemini-3.1-flash-image
 AUTO_CLOSE_ISSUE=true
 WEBHOOK_URL=
-USE_ADK_ORCHESTRATOR=true
+QUALITY_MODE=med
+USE_CUSTOM_FLAGS=false
+USE_ADK_ORCHESTRATOR=false
 ADK_HARD_FAIL=false
 PIPELINE_DRY_RUN=false
+USE_SINGLE_CALL_PIPELINE=true
+USE_FAST_TRELLIS_MODE=true
+USE_FAST_RENDER_MODE=true
+ENABLE_NETWORK_DIAGNOSTICS=false
+SKIP_MODAL_SECRET_PREFLIGHT=true
 ```
 
 ### C) Runtime Constraints in CI
@@ -88,6 +95,19 @@ ADK orchestration controls:
 2. `ADK_HARD_FAIL=false` allows fallback to the direct Modal chain if ADK fails during migration
 3. `ADK_HARD_FAIL=true` makes the pipeline fail immediately if ADK fails
 4. `PIPELINE_DRY_RUN=false` is required for real product-quality runs
+5. `QUALITY_MODE` controls presets: `low`, `med`, `high` (default: `med`)
+6. `USE_CUSTOM_FLAGS=false` applies preset mapping; set `true` to manage flags manually
+7. `USE_SINGLE_CALL_PIPELINE=true` runs the compute path in one Modal call to reduce orchestration overhead
+8. `USE_FAST_TRELLIS_MODE=true` lowers Trellis sampling/texture settings for faster iteration
+9. `USE_FAST_RENDER_MODE=true` shortens animation timing and lowers preview render cost
+10. `ENABLE_NETWORK_DIAGNOSTICS=false` skips extra CI network probes for faster startup
+11. `SKIP_MODAL_SECRET_PREFLIGHT=true` skips the `modal secret list` check to reduce control-plane overhead
+
+Preset mapping when `USE_CUSTOM_FLAGS=false`:
+
+1. `QUALITY_MODE=low`: max speed (`single_call=true`, `adk=false`, `fast_trellis=true`, `fast_render=true`, `skip_secret_preflight=true`)
+2. `QUALITY_MODE=med`: balanced (`single_call=true`, `adk=false`, `fast_trellis=false`, `fast_render=true`, `skip_secret_preflight=true`)
+3. `QUALITY_MODE=high`: quality/safety (`single_call=true`, `adk=true`, `fast_trellis=false`, `fast_render=false`, `skip_secret_preflight=false`)
 
 Model defaults:
 
