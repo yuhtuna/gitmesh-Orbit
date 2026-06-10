@@ -2646,7 +2646,11 @@ def get_world_bbox(obj):
 
 def move_empty_pivot(empty_obj, new_location):
     child_world = [(child, child.matrix_world.copy()) for child in empty_obj.children]
-    empty_obj.location = mathutils.Vector(new_location)
+    target_world = mathutils.Vector(new_location)
+    if empty_obj.parent:
+        empty_obj.location = empty_obj.parent.matrix_world.inverted() @ target_world
+    else:
+        empty_obj.location = target_world
     for child, matrix in child_world:
         child.matrix_world = matrix
 
