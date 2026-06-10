@@ -2959,9 +2959,22 @@ for order in sorted_orders:
             direction = 1.0
             if axis_idx == 1: # Z -> Y
                 direction = -1.0 # Trimesh Z points forward, Blender Y points forward. Wait, my math: cy_blend = -cz_tri. So inverted!
-                
+
+            signed_angle_rad = math.radians(angle_deg) * direction
+
+            # For horizontal chest/laptop lids hinging on X, force the free edge to
+            # lift UPWARD regardless of mesh orientation or the sign of angle_deg.
+            # Rotation about +X lifts geometry whose Y is greater than the pivot Y.
+            if archetype == "HORIZONTAL_SPLIT" and axis_idx == 0:
+                lid_pts = get_world_bbox(obj)
+                lid_center_y = sum(v.y for v in lid_pts) / len(lid_pts)
+                if lid_center_y >= blender_pivot[1]:
+                    signed_angle_rad = math.radians(abs(angle_deg))
+                else:
+                    signed_angle_rad = -math.radians(abs(angle_deg))
+
             # Insert end keyframe
-            obj.rotation_euler[axis_idx] += math.radians(angle_deg) * direction
+            obj.rotation_euler[axis_idx] += signed_angle_rad
             obj.keyframe_insert(data_path="rotation_euler", frame=end_frame)
             
             # Insert hold keyframe
