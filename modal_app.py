@@ -435,6 +435,11 @@ def _predict_slicing_plan_with_gemini(asset_name: str, bounds_info: str = "", ge
     
     fallback = {"archetype": "STATIC"}
     asset_lower = asset_name.lower()
+    
+    # Pre-emptive override for known static archetypes (no hinges, no splitting, static render only)
+    if any(k in asset_lower for k in ["shield", "sword", "sofa", "table", "chair", "rock", "stone", "wall", "helmet", "crown", "key"]):
+        return {"archetype": "STATIC", "confidence": 1.0, "should_animate": False, "reason": "known static asset archetype override"}
+
     if "door" in asset_lower or "gate" in asset_lower:
         fallback = {"archetype": "VERTICAL_SPLIT", "confidence": 0.8, "should_animate": True, "reason": "keyword matched door/gate"}
     elif "chest" in asset_lower or "box" in asset_lower or "crate" in asset_lower:
