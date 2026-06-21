@@ -1,6 +1,9 @@
 {
-  "name": "GitMesh",
-  "description": "An autonomous 3D technical art pipeline that functions as a GitLab CI/CD system for game assets, powered by Gemini 3.1 Flash and MCP.",
+  "name": "GitMesh Orbit",
+  "description": "An AI Technical Artist that uses GitLab Orbit to retrieve 3D spatial context (folder limits, polygon counts) before generating and auto-committing scaled 3D meshes.",
+  "trigger_keyword": "Meshgen:",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

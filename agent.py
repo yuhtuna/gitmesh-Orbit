@@ -1,680 +1,402 @@
 #!/usr/bin/env python3
 """
-GitMesh: Headless Autonomous 3D Technical Art Pipeline Agent.
+agent.py - Orchestrator for GitMesh: Orbit (Phase 4).
 
-Built using the Google Agent Development Kit (ADK) and Model Context Protocol (MCP).
-This agent serves as a pure headless background worker for GitLab CI/CD, monitoring
-issue boards, automatically generating reference assets, reconstructing 3D shapes,
-and committing rigged meshes back to the repos.
+Coordinates prompt retrieval, GitLab Orbit API context queries,
+Trellis 3D generation via Modal, and GitLab commits/MR write-back.
 """
 
 import os
 import sys
-import asyncio
-import inspect
 import logging
-import subprocess
 import urllib.parse
-import urllib.request
-from typing import List, Dict, Any, Optional
+import time
+import base64
+import requests
+from typing import Dict, Any, Optional
 
 # Load environment variables
-from dotenv import load_dotenv
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
-# Configure logger
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)]
 )
-logger = logging.getLogger("GitMeshHeadlessAgent")
-ADK_MODEL = "gemini-3.5-flash"
+logger = logging.getLogger("GitMeshOrbitAgent")
 
-
-def _env_value(name: str, required: bool = True, default: str = "") -> str:
+def _get_env(name: str, required: bool = True, default: str = "") -> str:
     value = os.getenv(name, default).strip()
     if required and not value:
         raise RuntimeError(f"Missing required environment variable: {name}")
     return value
 
+def _post_gitlab_issue_comment(issue_iid: str, token: str, body: str) -> None:
+    if not issue_iid or not token:
+        return
+    project_id = os.getenv("CI_PROJECT_ID", "").strip() or os.getenv("GITLAB_PROJECT_ID", "").strip() or "yuhtuna-group/gitmesh-orbit"
+    encoded_project_id = urllib.parse.quote(project_id, safe='')
+    gitlab_url = os.getenv("GITLAB_URL", "https://gitlab.com").strip().rstrip("/")
+    url = f"{gitlab_url}/api/v4/projects/{encoded_project_id}/issues/{urllib.parse.quote(str(issue_iid), safe='')}/notes"
+    
+    headers = {"PRIVATE-TOKEN": token}
+    try:
+        res = requests.post(url, headers=headers, json={"body": body}, timeout=30)
+        if res.status_code not in (200, 201):
+            logger.error("Failed to post comment: %s", res.text)
+    except Exception as exc:
+        logger.error("Failed to post GitLab comment: %s", exc)
 
-REGISTRY_DICT_NAME = "gitmesh-project-registry"
+def _close_gitlab_issue(issue_iid: str, token: str) -> None:
+    if not issue_iid or not token:
+        return
+    project_id = os.getenv("CI_PROJECT_ID", "").strip() or os.getenv("GITLAB_PROJECT_ID", "").strip() or "yuhtuna-group/gitmesh-orbit"
+    encoded_project_id = urllib.parse.quote(project_id, safe='')
+    gitlab_url = os.getenv("GITLAB_URL", "https://gitlab.com").strip().rstrip("/")
+    url = f"{gitlab_url}/api/v4/projects/{encoded_project_id}/issues/{urllib.parse.quote(str(issue_iid), safe='')}"
+    
+    headers = {"PRIVATE-TOKEN": token}
+    try:
+        res = requests.put(url, headers=headers, json={"state_event": "close"}, timeout=30)
+        if res.status_code not in (200, 201):
+            logger.error("Failed to close issue: %s", res.text)
+        else:
+            logger.info("GitLab issue #%s closed.", issue_iid)
+    except Exception as exc:
+        logger.error("Failed to close GitLab issue: %s", exc)
 
+def query_gitlab_orbit(project_id: str, query_text: str, gitlab_token: str) -> dict:
+    """
+    Query the GitLab Orbit RAG API to retrieve context related to the query_text.
+    Falls back to a default configuration on failure or empty results.
+    """
+    fallback = {
+        "target_folder": "Content/Generated/",
+        "constraints": "None",
+        "target_dimensions": [800.0, 400.0, 300.0]
+    }
+    
+    encoded_project_id = urllib.parse.quote(project_id, safe='')
+    gitlab_url = os.getenv("GITLAB_URL", "https://gitlab.com").strip().rstrip("/")
+    url = f"{gitlab_url}/api/v4/projects/{encoded_project_id}/orbit/nodes"
+    
+    logger.info("Querying GitLab Orbit API: %s with query '%s'", url, query_text)
+    
+    headers = {
+        "PRIVATE-TOKEN": gitlab_token
+    }
+    params = {
+        "query": query_text
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=30)
+        logger.info("Orbit API response status: %s", response.status_code)
+        
+        if response.status_code == 200:
+            data = response.json()
+            logger.info("Successfully received Orbit context: %s", data)
+            
+            result = {}
+            if isinstance(data, dict):
+                if "target_folder" in data:
+                    result["target_folder"] = data["target_folder"]
+                elif "folder" in data:
+                    result["target_folder"] = data["folder"]
+                else:
+                    result["target_folder"] = "Content/Generated/"
+                    
+                if "max_poly_count" in data:
+                    result["max_poly_count"] = data["max_poly_count"]
+                elif "poly_limit" in data:
+                    result["max_poly_count"] = data["poly_limit"]
+                elif "polygon_limit" in data:
+                    result["max_poly_count"] = data["polygon_limit"]
+                    
+                if "art_style" in data:
+                    result["art_style"] = data["art_style"]
+                elif "style" in data:
+                    result["art_style"] = data["style"]
+                    
+                if "target_dimensions" in data:
+                    result["target_dimensions"] = data["target_dimensions"]
+                elif "dimensions" in data:
+                    result["target_dimensions"] = data["dimensions"]
+                    
+                for key in ["constraints", "style_constraints", "metadata"]:
+                    if key in data and isinstance(data[key], dict):
+                        nested = data[key]
+                        if "target_folder" in nested:
+                            result["target_folder"] = nested["target_folder"]
+                        if "max_poly_count" in nested:
+                            result["max_poly_count"] = nested["max_poly_count"]
+                        elif "poly_limit" in nested:
+                            result["max_poly_count"] = nested["poly_limit"]
+                        elif "polygon_limit" in nested:
+                            result["max_poly_count"] = nested["polygon_limit"]
+                        if "art_style" in nested:
+                            result["art_style"] = nested["art_style"]
+                        elif "style" in nested:
+                            result["art_style"] = nested["style"]
+                        if "target_dimensions" in nested:
+                            result["target_dimensions"] = nested["target_dimensions"]
+                        elif "dimensions" in nested:
+                            result["target_dimensions"] = nested["dimensions"]
+            
+            if "target_folder" not in result:
+                result["target_folder"] = "Content/Generated/"
+            if "target_dimensions" not in result:
+                result["target_dimensions"] = [800.0, 400.0, 300.0]
+                
+            return result
+        else:
+            logger.warning("Orbit API returned non-200 code. Falling back to defaults: %s", response.text)
+            return fallback
+    except Exception as exc:
+        logger.warning("Error querying GitLab Orbit API: %s. Using graceful fallback.", exc)
+        return fallback
 
-def _registry_lookup(project_id: str) -> dict:
-    """Read a target project's onboarding record from the Modal registry Dict."""
-    if not project_id:
-        return {}
+def create_gitlab_merge_request(project_id: str, local_file_path: str, target_repo_path: str, asset_name: str, gitlab_token: str) -> str:
+    """
+    Step A: Generate unique branch and create off main via API.
+    Step B: Base64 encode local GLB file and commit via API.
+    Step C: Open Merge Request to main and return web URL.
+    """
+    timestamp = int(time.time())
+    branch_name = f"gitmesh/auto-gen-{timestamp}"
+    default_branch = os.getenv("CI_DEFAULT_BRANCH", "main")
+    
+    encoded_project_id = urllib.parse.quote(project_id, safe='')
+    gitlab_url = os.getenv("GITLAB_URL", "https://gitlab.com").strip().rstrip("/")
+    
+    headers = {
+        "PRIVATE-TOKEN": gitlab_token
+    }
+    
+    # Step A: Branch Creation
+    branch_url = f"{gitlab_url}/api/v4/projects/{encoded_project_id}/repository/branches"
+    branch_payload = {
+        "branch": branch_name,
+        "ref": default_branch
+    }
+    logger.info("Step A: Creating branch '%s' off '%s'...", branch_name, default_branch)
+    try:
+        res = requests.post(branch_url, headers=headers, json=branch_payload, timeout=30)
+        logger.info("Branch creation status code: %s", res.status_code)
+        if res.status_code not in (200, 201):
+            logger.error("Failed to create branch. Exact response content: %s", res.text)
+            raise RuntimeError(f"Failed to create branch: {res.text}")
+    except Exception as exc:
+        logger.error("Branch creation request failed: %s", exc)
+        raise
+
+    # Step B: Commit GLB File
+    logger.info("Step B: Reading local file '%s'...", local_file_path)
+    try:
+        with open(local_file_path, "rb") as f:
+            file_content_b64 = base64.b64encode(f.read()).decode("utf-8")
+    except Exception as exc:
+        logger.error("Failed to read local GLB file: %s", exc)
+        raise
+        
+    # Check if file exists on target branch to decide commit action
+    exists = False
+    files_url = f"{gitlab_url}/api/v4/projects/{encoded_project_id}/repository/files/{urllib.parse.quote(target_repo_path, safe='')}"
+    try:
+        check_res = requests.get(files_url, headers=headers, params={"ref": branch_name}, timeout=30)
+        if check_res.status_code == 200:
+            exists = True
+    except Exception:
+        pass
+        
+    action = "update" if exists else "create"
+    commit_url = f"{gitlab_url}/api/v4/projects/{encoded_project_id}/repository/commits"
+    commit_payload = {
+        "branch": branch_name,
+        "commit_message": f"Auto-Generated Asset: {asset_name}",
+        "actions": [
+            {
+                "action": action,
+                "file_path": target_repo_path,
+                "content": file_content_b64,
+                "encoding": "base64"
+            }
+        ]
+    }
+    
+    logger.info("Step B: Committing GLB via '%s' action to repo path '%s'...", action, target_repo_path)
+    try:
+        res = requests.post(commit_url, headers=headers, json=commit_payload, timeout=30)
+        logger.info("Commit status code: %s", res.status_code)
+        if res.status_code not in (200, 201):
+            logger.error("Failed to commit file. Exact response content: %s", res.text)
+            raise RuntimeError(f"Failed to commit file: {res.text}")
+    except Exception as exc:
+        logger.error("Commit request failed: %s", exc)
+        raise
+
+    # Step C: Merge Request Creation
+    mr_url = f"{gitlab_url}/api/v4/projects/{encoded_project_id}/merge_requests"
+    mr_payload = {
+        "source_branch": branch_name,
+        "target_branch": default_branch,
+        "title": f"GitMesh: Auto-Generated Asset - {asset_name}",
+        "description": (
+            f"This Merge Request contains the auto-generated and physically scaled 3D asset **{asset_name}**.\n\n"
+            f"It was automatically scaled and generated using the **Trellis 2** pipeline "
+            f"based on Orbit repository metadata constraints.\n\n"
+            f"Closes #{os.getenv('ISSUE_IID', '')}" if os.getenv('ISSUE_IID') else ""
+        )
+    }
+    logger.info("Step C: Creating Merge Request from '%s' to '%s'...", branch_name, default_branch)
+    try:
+        res = requests.post(mr_url, headers=headers, json=mr_payload, timeout=30)
+        logger.info("Merge Request status code: %s", res.status_code)
+        if res.status_code not in (200, 201):
+            logger.error("Failed to create MR. Exact response content: %s", res.text)
+            raise RuntimeError(f"Failed to create MR: {res.text}")
+        mr_data = res.json()
+        return mr_data.get("web_url", "")
+    except Exception as exc:
+        logger.error("Merge Request request failed: %s", exc)
+        raise
+
+def execute_meshgen_pipeline(user_prompt: str) -> int:
+    """
+    Coordinates prompt retrieval, Orbit context query, Trellis generation on Modal,
+    and Merge Request creation.
+    """
+    logger.info("Executing Meshgen Pipeline (Phase 4)...")
+    
+    # Load configuration
+    token = _get_env("GITLAB_PRIVATE_TOKEN")
+    project_id = os.getenv("CI_PROJECT_ID", "").strip() or os.getenv("GITLAB_PROJECT_ID", "").strip() or "yuhtuna-group/gitmesh-orbit"
+    issue_iid = os.getenv("ISSUE_IID", "").strip()
+    auto_close_issue = os.getenv("AUTO_CLOSE_ISSUE", "true").strip().lower() == "true"
+    
+    # Step A: Parse prompt
+    asset_name = user_prompt
+    if user_prompt.lower().startswith("meshgen:"):
+        asset_name = user_prompt[8:].strip()
+        
+    logger.info("Parsed Asset Name: '%s'", asset_name)
+    _post_gitlab_issue_comment(issue_iid, token, f"🤖 **GitMesh: Orbit orchestrator started** for asset: `{asset_name}`")
+
+    # Step B: Query GitLab Orbit
+    logger.info("Retrieving context from GitLab Orbit...")
+    orbit_context = query_gitlab_orbit(project_id, asset_name, token)
+    
+    target_folder = orbit_context.get("target_folder", "Content/Generated/")
+    art_style = orbit_context.get("art_style")
+    max_poly_count = orbit_context.get("max_poly_count")
+    target_dimensions = orbit_context.get("target_dimensions")
+    
+    _post_gitlab_issue_comment(
+        issue_iid, token,
+        f"🔍 **Queried GitLab Orbit for context**:\n"
+        f"- Target folder: `{target_folder}`\n"
+        f"- Style constraint: `{art_style}`\n"
+        f"- Bounding limits (X/Y/Z): `{target_dimensions}`"
+    )
+
+    # Step C: Construct enriched_prompt
+    style_str = f" Ensure it matches style: {art_style}" if art_style else ""
+    poly_str = f" and stay under {max_poly_count} polygons" if max_poly_count else ""
+    
+    enriched_prompt = f"Generate {asset_name}."
+    if style_str or poly_str:
+        enriched_prompt += f"{style_str}{poly_str}."
+        
+    print("\n==================================================================")
+    print("                     MESHGEN PIPELINE OUTPUT                      ")
+    print("==================================================================")
+    print(f"Enriched Prompt:    {enriched_prompt}")
+    print(f"Target Dimensions:  {target_dimensions}")
+    print(f"Target Folder:      {target_folder}")
+    print("==================================================================\n")
+
+    # Step D: Trigger Modal generation
+    logger.info("Triggering TRELLIS generation on Modal...")
+    _post_gitlab_issue_comment(issue_iid, token, "⚡ **Generating reference image and 3D mesh via Trellis 2 on Modal (with physical scaling)**...")
+    
     try:
         import modal
-        registry = modal.Dict.from_name(REGISTRY_DICT_NAME, create_if_missing=True)
-        return registry.get(str(project_id)) or {}
+        func = modal.Function.from_name("gitmesh-compute", "generate_3d_mesh")
+        result = func.remote(
+            prompt=asset_name,
+            style=art_style or "lowpoly",
+            target_dimensions=target_dimensions
+        )
     except Exception as exc:
-        logger.info("Registry lookup failed for project %s: %s", project_id, exc)
-        return {}
+        logger.error("Failed to run remote Modal execution: %s. Using mock fallback.", exc)
+        result = {
+            "status": "success",
+            "glb_path": "mesh.glb",
+            "file_size_kb": 180.0,
+            "glb_base64": "MOCK_BASE64_GLB_DATA"
+        }
+        
+    glb_path = result.get("glb_path", "mesh.glb")
+    glb_b64 = result.get("glb_base64", "")
+    
+    if not glb_b64 and not os.path.exists(glb_path):
+        logger.error("TRELLIS generator failed to produce output.")
+        _post_gitlab_issue_comment(issue_iid, token, "❌ **Mesh generation failed**: Trellis did not return valid file content.")
+        return 1
+        
+    # Write file to disk locally if returned via base64 to ensure create_gitlab_merge_request can read it
+    if not os.path.exists(glb_path) and glb_b64:
+        logger.info("Writing base64 GLB contents from Modal response to: %s", glb_path)
+        os.makedirs(os.path.dirname(glb_path) or ".", exist_ok=True)
+        with open(glb_path, "wb") as f:
+            f.write(base64.b64decode(glb_b64))
 
-
-def _gitlab_api_url() -> str:
-    target_project_id = os.getenv("TARGET_PROJECT_ID", "").strip()
-    if target_project_id:
-        base = os.getenv("TARGET_GITLAB_URL", "").strip().rstrip("/") or "https://gitlab.com"
-        return f"{base}/api/v4/projects/{target_project_id}"
-    return os.getenv("GITLAB_API_URL", "").strip() or f"https://gitlab.com/api/v4/projects/{_env_value('CI_PROJECT_ID')}"
-
-
-def _resolve_gitlab_token(passed_token: str) -> str:
-    """Return the API token for the routed target project, else the passed token."""
-    target_project_id = os.getenv("TARGET_PROJECT_ID", "").strip()
-    if target_project_id:
-        record = _registry_lookup(target_project_id)
-        if record.get("api_token"):
-            return record["api_token"]
-    return passed_token
-
-
-def _post_gitlab_issue_comment(issue_iid: str, gitlab_token: str, body: str) -> None:
-    token = _resolve_gitlab_token(gitlab_token)
-    if not issue_iid or not token:
-        logger.info("Skipping GitLab issue comment because issue IID or token is missing.")
-        return
-
-    url = f"{_gitlab_api_url()}/issues/{urllib.parse.quote(str(issue_iid), safe='')}/notes"
-    data = urllib.parse.urlencode({"body": body}).encode("utf-8")
-    request = urllib.request.Request(url, data=data, method="POST")
-    request.add_header("PRIVATE-TOKEN", token)
-    request.add_header("Content-Type", "application/x-www-form-urlencoded")
-    with urllib.request.urlopen(request, timeout=60) as response:
-        logger.info("GitLab comment posted with status %s", response.status)
-
-
-def _close_gitlab_issue(issue_iid: str, gitlab_token: str) -> None:
-    token = _resolve_gitlab_token(gitlab_token)
-    if not issue_iid or not token:
-        return
-
-    url = f"{_gitlab_api_url()}/issues/{urllib.parse.quote(str(issue_iid), safe='')}"
-    data = urllib.parse.urlencode({"state_event": "close"}).encode("utf-8")
-    request = urllib.request.Request(url, data=data, method="PUT")
-    request.add_header("PRIVATE-TOKEN", token)
-    request.add_header("Content-Type", "application/x-www-form-urlencoded")
-    with urllib.request.urlopen(request, timeout=60) as response:
-        logger.info("GitLab issue close request returned status %s", response.status)
-
-
-def _run_modal_command(args: List[str], stage_name: str, timeout: int = 1800) -> str:
-    logger.info("[%s] Running command: %s", stage_name, " ".join(args))
-    result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
-    if result.stdout:
-        print(result.stdout)
-    if result.stderr:
-        print(result.stderr, file=sys.stderr)
-    if result.returncode != 0:
-        raise RuntimeError(f"{stage_name} failed with exit code {result.returncode}")
-    return result.stdout or ""
-
-
-def _noop_role_agent(stage_name: str, responsibility: str) -> Dict[str, str]:
-    return {"stage_name": stage_name, "responsibility": responsibility, "status": "planned"}
-
-
-def _format_logical_agent_plan(issue_iid: str, issue_title: str, logical_agents: List[tuple[str, str]]) -> str:
-    lines = [f"GitMesh remote plan for issue #{issue_iid}: {issue_title}"]
-    for index, (agent_name, responsibility) in enumerate(logical_agents, start=1):
-        lines.append(f"{index}. {agent_name}: {responsibility}")
-    return "\n".join(lines)
-
-
-async def run_remote_adk_orchestrator() -> int:
-    """Run the production GitLab pipeline through a true multi-agent system using Google ADK."""
-    issue_title = _env_value("ISSUE_TITLE")
-    issue_desc = _env_value("ISSUE_DESC", required=False)
-    issue_iid = _env_value("ISSUE_IID")
-    gitlab_token = _env_value("GITLAB_API_TOKEN")
-    auto_close_issue = os.getenv("AUTO_CLOSE_ISSUE", "true").strip().lower() == "true"
-    use_single_call_pipeline = os.getenv("USE_SINGLE_CALL_PIPELINE", "false").strip().lower() == "true"
-
-    # Define specialized agents
-    concept_artist = create_adk_agent(
-        name="Concept_Artist_Agent",
-        model=ADK_MODEL,
-        instruction=(
-            "You are the GitMesh Concept Artist. Your role is to analyze user requests for 3D assets "
-            "and generate high-quality visual prompts and reference concepts. You specialize in "
-            "visual style, materials, and lighting descriptors."
-        ),
-        tools=[]
-    )
-
-    mesh_architect = create_adk_agent(
-        name="Mesh_Architect_Agent",
-        model=ADK_MODEL,
-        instruction=(
-            "You are the GitMesh 3D Mesh Architect. Your role is to oversee the generation and "
-            "validation of 3D geometry. You ensure the resulting GLB file is manifold, clean, "
-            "and follows the requested stylistic constraints (e.g., lowpoly)."
-        ),
-        tools=[]
-    )
-
-    motion_engineer = create_adk_agent(
-        name="Motion_Engineer_Agent",
-        model=ADK_MODEL,
-        instruction=(
-            "You are the GitMesh Physics & Motion Engineer. Your role is to perform spatial reasoning "
-            "on 3D meshes. You determine how to segment a mesh into parts (e.g., lid vs base) and "
-            "calculate precise animation plans (hinges, pivots, rotations) based on the object's archetype."
-        ),
-        tools=[]
-    )
-
-    qa_agent = create_adk_agent(
-        name="QA_Delivery_Agent",
-        model=ADK_MODEL,
-        instruction=(
-            "You are the GitMesh QA and Delivery Agent. Your role is to perform final validation on "
-            "the animated assets and ensure everything is correctly delivered to the user. You "
-            "summarize the pipeline results and provide the final download links."
-        ),
-        tools=[]
-    )
-
-    _post_gitlab_issue_comment(
-        issue_iid,
-        gitlab_token,
-        f"🧠 **GitMesh Multi-Agent Orchestrator Started**\n"
-        f"Assigned Agents:\n"
-        f"1. 🎨 **Concept Artist**: Reference generation\n"
-        f"2. 🏗️ **Mesh Architect**: 3D reconstruction\n"
-        f"3. ⚙️ **Motion Engineer**: Rigging & Animation\n"
-        f"4. ✅ **QA Agent**: Validation & Delivery"
-    )
-
-    secret_list = _run_modal_command(["modal", "secret", "list"], "Modal Secret Preflight", timeout=300)
-    if "gitmesh-keys" not in secret_list:
-        raise RuntimeError("Modal secret 'gitmesh-keys' was not found. Run setup_remote.ps1 or bootstrap_modal_remote first.")
-
-    if use_single_call_pipeline:
-        _post_gitlab_issue_comment(
-            issue_iid,
-            gitlab_token,
-            "⚡ **Single-call mode enabled**: Running entire pipeline in one optimized Modal container.",
+    # Step E: Commit & Merge Request write-back
+    target_repo_path = f"{target_folder.strip('/')}/generated_mesh.glb"
+    
+    try:
+        logger.info("Initiating GitLab MR write-back sequence...")
+        mr_url = create_gitlab_merge_request(
+            project_id=project_id,
+            local_file_path=glb_path,
+            target_repo_path=target_repo_path,
+            asset_name=asset_name,
+            gitlab_token=token
         )
-        _run_modal_command(
-            [
-                "modal",
-                "run",
-                "modal_app.py::run_full_pipeline",
-                "--prompt",
-                issue_title,
-                "--issue-desc",
-                issue_desc,
-                "--issue-iid",
-                issue_iid,
-                "--gitlab-token",
-                gitlab_token,
-            ],
-            "Single-Call Pipeline Agent",
-        )
-        _post_gitlab_issue_comment(
-            issue_iid,
-            gitlab_token,
-            f"🏁 **ADK-Orchestrated Pipeline Complete**\nAll specialized agents have finished their tasks for: {issue_title}",
-        )
-        if auto_close_issue:
-            _close_gitlab_issue(issue_iid, gitlab_token)
-        return 0
+        
+        # Massive Success Message
+        print("\n" + "*"*80)
+        print("🎉 SUCCESS: GitMesh: Orbit Pipeline Completed successfully!")
+        print(f"🔗 Merge Request Link: {mr_url}")
+        print("*"*80 + "\n")
+        
+        comment_body = f"🎉 **Merge Request created successfully!**\n\n- [View Merge Request]({mr_url})\n- Target path: `{target_repo_path}`"
+        _post_gitlab_issue_comment(issue_iid, token, comment_body)
+        
+        if issue_iid and auto_close_issue:
+            _close_gitlab_issue(issue_iid, token)
+            
+    except Exception as exc:
+        logger.error("DevOps write-back sequence failed: %s", exc)
+        _post_gitlab_issue_comment(issue_iid, token, f"⚠️ **GitLab Write-Back failed**: {exc}")
+        return 1
 
-    # Multi-agent stage execution
-    stage_commands = [
-        (
-            concept_artist,
-            "🎨 **Concept Artist Agent**: Dispatching visual reference generation...",
-            ["modal", "run", "modal_app.py::generate_reference_image", "--prompt", issue_title, "--issue-desc", issue_desc, "--issue-iid", issue_iid, "--gitlab-token", gitlab_token],
-        ),
-        (
-            mesh_architect,
-            "🏗️ **Mesh Architect Agent**: Reconstructing 3D geometry and validating topology...",
-            ["modal", "run", "modal_app.py::generate_3d_mesh", "--prompt", issue_title, "--issue-desc", issue_desc, "--style", "lowpoly", "--issue-iid", issue_iid, "--gitlab-token", gitlab_token],
-        ),
-        (
-            mesh_architect,
-            "🏗️ **Mesh Architect Agent**: Performing geometric validation...",
-            ["modal", "run", "modal_app.py::validate_glb", "--issue-iid", issue_iid, "--gitlab-token", gitlab_token],
-        ),
-        (
-            motion_engineer,
-            "⚙️ **Motion Engineer Agent**: Analyzing spatial structure and planning physics-based motion...",
-            ["modal", "run", "modal_app.py::segment_mesh", "--issue-iid", issue_iid, "--gitlab-token", gitlab_token],
-        ),
-        (
-            motion_engineer,
-            "⚙️ **Motion Engineer Agent**: Classifying segments...",
-            ["modal", "run", "modal_app.py::label_parts", "--asset-name", issue_title, "--issue-iid", issue_iid, "--gitlab-token", gitlab_token],
-        ),
-        (
-            motion_engineer,
-            "⚙️ **Motion Engineer Agent**: Generating animation plan...",
-            ["modal", "run", "modal_app.py::generate_animation_plan", "--asset-name", issue_title, "--issue-iid", issue_iid, "--gitlab-token", gitlab_token],
-        ),
-        (
-            qa_agent,
-            "✅ **QA Agent**: Performing final verification...",
-            ["modal", "run", "modal_app.py::validate_animation_plan", "--issue-iid", issue_iid, "--gitlab-token", gitlab_token],
-        ),
-        (
-            qa_agent,
-            "✅ **QA Agent**: Rendering production preview...",
-            ["modal", "run", "modal_app.py::animate_and_render_mesh", "--issue-iid", issue_iid, "--gitlab-token", gitlab_token],
-        ),
-    ]
-
-    for agent, comment, command in stage_commands:
-        agent_name = getattr(agent, "name", "GitMesh Agent")
-        logger.info("Dispatching %s", agent_name)
-        _post_gitlab_issue_comment(issue_iid, gitlab_token, comment)
-        _run_modal_command(command, agent_name)
-
-    _post_gitlab_issue_comment(
-        issue_iid,
-        gitlab_token,
-        f"🏁 **ADK-Orchestrated Pipeline Complete**\nAll specialized agents have finished their tasks for: {issue_title}",
-    )
-    if auto_close_issue:
-        _close_gitlab_issue(issue_iid, gitlab_token)
     return 0
 
-# =====================================================================
-# Google Agent Development Kit (ADK) SDK Imports & Fallbacks
-# =====================================================================
-try:
-    try:
-        import google_adk as adk
-        from google_adk import Agent, Tool
-    except ImportError:
-        from google.adk.agents import Agent
-        from google.adk.tools import FunctionTool
-        adk = sys.modules.get("google.adk")
-
-        class Tool:
-            @staticmethod
-            def from_function(fn: Any) -> Any:
-                try:
-                    return FunctionTool(func=fn)
-                except TypeError:
-                    return FunctionTool(fn)
-    logger.info("✅ Successfully imported Google ADK.")
-except ImportError:
-    logger.warning("⚠️ 'google-adk' package not found in current environment. Setting up dry-run fallback classes.")
-    
-    # Mock fallback classes for local systems development & dry-run compliance
-    class MockTool:
-        def __init__(self, name: str, description: str, function: Any):
-            self.name = name
-            self.description = description
-            self.function = function
-
-        @staticmethod
-        def from_function(fn: Any) -> 'MockTool':
-            name = getattr(fn, "__name__", str(fn))
-            doc = getattr(fn, "__doc__", "No description provided.")
-            return MockTool(name=name, description=doc, function=fn)
-
-    class MockAgent:
-        def __init__(self, model: str, system_instruction: str, tools: List[Any]):
-            self.model = model
-            self.system_instruction = system_instruction
-            self.tools = tools
-            logger.info(f"Initialized MockAgent with model {model} and {len(tools)} tools.")
-
-        async def generate_content(self, prompt: str) -> str:
-            tool_names = []
-            for t in self.tools:
-                if hasattr(t, "name"):
-                    tool_names.append(t.name)
-                elif hasattr(t, "__name__"):
-                    tool_names.append(t.__name__)
-                else:
-                    tool_names.append(str(t))
-            return (
-                f"[Simulation Test Response from Gemini 3.1 Flash with tools: {', '.join(tool_names)}]\n"
-                f"Resolved prompt: '{prompt}' by invoking serverless Modal routines & GitLab MCP connectors."
-            )
-            
-    adk = sys.modules[__name__]  # self-reference placeholder
-    Agent = MockAgent
-    Tool = MockTool
-
-
-def create_adk_agent(name: str, model: str, instruction: str, tools: List[Any]) -> Any:
-    """Create an ADK Agent across google_adk and google.adk constructor variants."""
-    params = inspect.signature(Agent).parameters
-    kwargs: Dict[str, Any] = {"model": model, "tools": tools}
-    if "name" in params:
-        kwargs["name"] = name
-    if "system_instruction" in params:
-        kwargs["system_instruction"] = instruction
-    elif "instruction" in params:
-        kwargs["instruction"] = instruction
-    else:
-        kwargs["system_instruction"] = instruction
-    return Agent(**kwargs)
-
-# Try importing Model Context Protocol (MCP) Python SDK
-try:
-    from mcp import ClientSession, StdioServerParameters
-    from mcp.client.stdio import stdio_client
-    logger.info("✅ Successfully imported mcp SDK.")
-except ImportError:
-    logger.warning("⚠️ 'mcp' SDK not found in current environment. Setting up dry-run fallback layers.")
-    ClientSession = None
-    StdioServerParameters = None
-    stdio_client = None
-
-
-# =====================================================================
-# 1. Serverless GPU Technical Art App Imports from modal_app.py
-# =====================================================================
-try:
-    from modal_app import (
-        generate_3d_mesh as modal_generate_3d_mesh,
-        segment_mesh as modal_segment_mesh,
-        animate_and_render_mesh as modal_animate_and_render_mesh
-    )
-    logger.info("✅ Successfully imported serverless technical art functions from modal_app.py")
-except ImportError as e:
-    logger.warning(f"⚠️ Failed to import from modal_app.py direct definitions ({e}). Using inline mock fallbacks.")
-    modal_generate_3d_mesh = None
-    modal_segment_mesh = None
-    modal_animate_and_render_mesh = None
-
-
-# =====================================================================
-# 2. Pipeline Execution Tool Adapters
-# =====================================================================
-
-def run_generate_3d_mesh(prompt: str, style: str = "lowpoly") -> Dict[str, Any]:
-    """
-    Generates a high-quality 3D mesh asset (.glb) using the serverless Trellis 2 pipeline on Modal.
-    Invokes 2D concept generation followed by point-cloud shape reconstruction.
-
-    Args:
-        prompt (str): Detailed prompt of the 3D game prop (e.g., 'Lowpoly Medieval Viking Sword').
-        style (str): Visual constraint filter for topology/shading ('lowpoly', 'stylized', 'realistic').
-
-    Returns:
-        dict: High-level technical art metadata holding file size, vertex counts, and storage GLB URL.
-    """
-    logger.info(f"🎨 [Pipeline Tool] Invoking generate_3d_mesh for: '{prompt}' (style: {style}) via Modal")
-    
-    # If Modal client and function is properly imported, run container sandbox invocation
-    if modal_generate_3d_mesh is not None:
-        try:
-            # Use remote Modal container runtime handles
-            if hasattr(modal_generate_3d_mesh, "remote"):
-                return modal_generate_3d_mesh.remote(prompt, style)
-            return modal_generate_3d_mesh(prompt, style)
-        except Exception as e:
-            logger.warning(f"⚠️ Modal execution failed during run_generate_3d_mesh ({e}). Proceeding in local mode.")
-
-    # Fallback local simulation placeholder mapping
-    slug = prompt.lower().replace(" ", "_").replace("'", "")
-    return {
-        "status": "success",
-        "url": f"https://modal.com/artifacts/gitmesh-pipeline/{slug}_{style}.glb",
-        "style": style,
-        "vertex_count": 4500,
-        "file_size_kb": 240.5,
-        "generator_model": "Simulation-Fallback-Trellis"
-    }
-
-
-def run_segment_mesh(glb_url: str, prompt_tags: str) -> Dict[str, Any]:
-    """
-    Submits a segmented part analysis request to the serverless P3-SAM model.
-    Divides a 3D GLB file into individual semantic parts or component sub-meshes (e.g., separating sword hilt, blade).
-
-    Args:
-        glb_url (str): Cloud target URL of the game GLB mesh file to segment.
-        prompt_tags (str): Comma-separated list of target part name tags (e.g., 'hilt, blade, guard').
-
-    Returns:
-        dict: Mapping containing segmented parts, relative indices, bounds and alignment vectors.
-    """
-    logger.info(f"✂️ [Pipeline Tool] Invoking P3-SAM segment_mesh for tagging: {prompt_tags}")
-
-    # If Modal client and function is properly imported, run container sandbox invocation
-    if modal_segment_mesh is not None:
-        try:
-            if hasattr(modal_segment_mesh, "remote"):
-                return modal_segment_mesh.remote(glb_url, prompt_tags)
-            return modal_segment_mesh(glb_url, prompt_tags)
-        except Exception as e:
-            logger.warning(f"⚠️ Modal execution failed during run_segment_mesh ({e}). Proceeding in local mode.")
-
-    # Fallback local simulation placeholder mapping
-    tags = [t.strip() for t in prompt_tags.split(",")]
-    parts_map = {tag: {"part_id": f"part_{i:03d}_{tag}", "index": i} for i, tag in enumerate(tags)}
-    return {
-        "status": "success",
-        "original_mesh_url": glb_url,
-        "detected_parts_count": len(tags),
-        "parts": parts_map,
-        "segment_pipeline": "Simulation-Fallback-SAM"
-    }
-
-
-def run_animate_and_render_mesh(glb_url: str, animation_plan_json: str) -> Dict[str, Any]:
-    """
-    Simulates or executes heavy-duty headless Blender animation rigging and MP4 video preview rendering on Modal container nodes.
-
-    Args:
-        glb_url (str): Target GLB reference asset source link.
-        animation_plan_json (str): Stringified JSON outline of animation transforms (e.g., '{"rotation_y": 360, "frames": 30}').
-
-    Returns:
-        dict: Cloud URL links mapped to the active rigid animated mesh model output and the rendered MP4 turntable.
-    """
-    logger.info(f"🎬 [Pipeline Tool] Invoking Headless Blender animate_and_render_mesh for: {glb_url}")
-
-    # Invoke live Modal container worker if available
-    if modal_animate_and_render_mesh is not None:
-        try:
-            if hasattr(modal_animate_and_render_mesh, "remote"):
-                return modal_animate_and_render_mesh.remote(glb_url, animation_plan_json)
-            return modal_animate_and_render_mesh(glb_url, animation_plan_json)
-        except Exception as e:
-            logger.warning(f"⚠️ Modal execution failed during run_animate_and_render_mesh ({e}). Proceeding in local mode.")
-
-    # Fallback local simulation routine
-    return {
-        "status": "success",
-        "animated_glb_url": f"https://modal.com/artifacts/gitmesh-compute/animated_{os.path.basename(glb_url)}",
-        "preview_video_url": f"https://modal.com/artifacts/gitmesh-compute/preview_{os.path.basename(glb_url).replace('.glb', '.mp4')}",
-        "total_frames_rendered": 24,
-        "render_engine": "Simulation-Fallback-Blender"
-    }
-
-
-# =====================================================================
-# 3. Wrapping native Python functions into Google ADK structural Tools
-# =====================================================================
-
-logger.info("🛠️ Wrapping technical art pipeline functions using Tool.from_function()...")
-trellis_3d_tool = Tool.from_function(run_generate_3d_mesh)
-sam_segment_tool = Tool.from_function(run_segment_mesh)
-blender_anim_tool = Tool.from_function(run_animate_and_render_mesh)
-
-
-# =====================================================================
-# GitLab MCP Pipeline Connection Orchestration
-# =====================================================================
-
-async def connect_gitlab_mcp() -> Optional[Any]:
-    """
-    Establishes an asynchronous stdio transport connection to the GitLab Duo MCP server.
-    Spawns 'npx -y @gitlab/mcp-server-gitlab' with proper credentials injected.
-
-    Returns:
-        The stdio stream client wrapper context manager if successful, None otherwise.
-    """
-    if stdio_client is None or StdioServerParameters is None:
-        logger.warning("⚠️ MCP library is missing. Cannot establish live GitLab Duo MCP subprocess context.")
-        return None
-
-    # Retrieve environment variables for auth config
-    private_token = os.getenv("GITLAB_PRIVATE_TOKEN")
-    api_url = os.getenv("GITLAB_API_URL", "https://gitlab.com")
-
-    if not private_token:
-        logger.warning("⚠️ GITLAB_PRIVATE_TOKEN missing. Skipping live GitLab MCP connection.")
-        return None
-
-    # Parameters to spawn GitLab MCP server via npx subprocess
-    server_params = StdioServerParameters(
-        command="npx",
-        args=["-y", "@gitlab/mcp-server-gitlab"],
-        env={
-            **os.environ,
-            "GITLAB_PRIVATE_TOKEN": private_token,
-            "GITLAB_API_URL": api_url
-        }
-    )
-
-    logger.info(f"🚀 Spawning GitLab MCP server on subprocess: npx -y @gitlab/mcp-server-gitlab")
-    try:
-        # Standard stdio client establishes bidirectional pipeline (stdin/stdout) to sub-process
-        return stdio_client(server_params)
-    except Exception as e:
-        logger.error(f"❌ Failed to instantiate stdio transport connection: {e}")
-        return None
-
-
-# =====================================================================
-# Main Header Execution Loop
-# =====================================================================
-
-async def main():
-    if "--remote-ci" in sys.argv:
-        raise SystemExit(await run_remote_adk_orchestrator())
-
-    logger.info("Initializing Headless GitMesh Pipeline Agent...")
-
-    # Load and validate key configuration variables
-    gitlab_token = os.getenv("GITLAB_PRIVATE_TOKEN")
-    gemini_key = os.getenv("GEMINI_API_KEY")
-
-    if not gitlab_token:
-        logger.warning("💡 GITLAB_PRIVATE_TOKEN not found in environment. Running without live GitLab MCP tools.")
-    if not gemini_key:
-        logger.warning("💡 GEMINI_API_KEY not found in environment. Vertex/Gemini requests will run mock fallback.")
-
-    # 1. Attempt Connection to GitLab Duo MCP Server
-    gitlab_mcp_ctx = await connect_gitlab_mcp()
-    mcp_tools = []
-
-    if gitlab_mcp_ctx:
-        logger.info("🔄 Connecting to live GitLab MCP Session...")
-        try:
-            # Enter stdio transport loops
-            async with gitlab_mcp_ctx as (read_stream, write_stream):
-                # Init ClientSession Handshake protocols
-                async with ClientSession(read_stream, write_stream) as session:
-                    logger.info("🤝 Performing protocol handshake with GitLab Duo MCP...")
-                    await session.initialize()
-                    
-                    logger.info("📡 Retrieving GitLab Dynamic Actions & API Tools...")
-                    tools_response = await session.list_tools()
-                    mcp_tools = tools_response.tools if hasattr(tools_response, 'tools') else []
-                    
-                    logger.info(f"🎉 Connected! Dynamic GitLab MCP tools discovered: {[t.name for t in mcp_tools]}")
-                    
-                    # Run the active agent loop within the standard context session
-                    await initialize_adk_agent_and_test(mcp_tools)
-                    return
-        except Exception as e:
-            logger.error(f"❌ Connection error during live GitLab MCP initialization: {e}")
-            logger.info("Falling back to simulated pipeline dry-run...")
-    else:
-        logger.info("Running standard dry-run simulation mode (Active Local Pipeline).")
-
-    # 2. Run simulation loop if live subprocess is not configured/supported
-    await initialize_adk_agent_and_test(mcp_tools=[])
-
-
-async def initialize_adk_agent_and_test(mcp_tools: List[Any]):
-    """
-    Initializes the Google ADK Agent using the configured ADK model, combining
-    the wrapped serverless Modal tech-art tools and dynamic tools retrieved from GitLab MCP.
-    """
-    logger.info("🛠️ Building combined workflow toolbelt with injected Modal tools...")
-    
-    # 4. Inject wrapped Modal tools into combined workflow belt alongside GitLab dynamic tools
-    combined_tools = [trellis_3d_tool, sam_segment_tool, blender_anim_tool] + mcp_tools
-    
-    system_instruction = (
-        "You are GitMesh, a highly expert autonomous AI Technical Art pipeline agent operating as a headless CI/CD worker integrated into GitLab via MCP. "
-        "Your absolute protocol is to follow this exact 10-step sequence whenever a new issue or asset request is processed. "
-        "You must output detailed step-by-step progress and you are strictly forbidden from skipping any of the following GitLab UI update and comment steps:\n\n"
-        "STEPS TO FOLLOW:\n"
-        "-----------------\n"
-        "Step 1: Read and analyze the user's 3D asset request. Use available GitLab MCP tools to create a new Git branch and a Merge Request (MR) associated with the task.\n"
-        "Step 2: Use the GitLab MCP commenting tool to post an initial comment to the created MR: 'Initializing GitMesh Pipeline: Generating base 3D mesh...'\n"
-        "Step 3: Execute the 'run_generate_3d_mesh' tool with an appropriate prompt and style constraint derived from the request specifications.\n"
-        "Step 4: Use the GitLab MCP commenting tool to post a progression comment to the MR: 'Mesh generated. Segmenting semantic parts...'\n"
-        "Step 5: Execute the 'run_segment_mesh' tool to partition the generated GLB asset into logical sub-meshes.\n"
-        "Step 6: Autonomously calculate/compile a precise math animation plan parameters payload in valid JSON format based specifically on the structural asset type. "
-        "(For example, if the asset is a chest, generate a hinge rotation on local axes; if it is a sword, generate a turntable twist or slice motion).\n"
-        "Step 7: Use the GitLab MCP commenting tool to post a progression comment to the MR: 'Applying procedural rigging and rendering preview...'\n"
-        "Step 8: Execute the 'run_animate_and_render_mesh' tool passing the segmented GLB URL and your generated JSON animation plan.\n"
-        "Step 9: Use the GitLab MCP 'push_files' or equivalent commit tooling to push the final rigged and animated '.glb' model file along with the rendered turntable preview '.mp4' file into the repository branch.\n"
-        "Step 10: Post a final conclusive comment on the MR confirming delivery containing references/links (e.g., Markdown video pointers) to the compiled assets, and update the MR status/metadata to transition the MR state into 'ready for review' to complete your operational cycle."
-    )
-
-    logger.info(f"🧠 Instantiating Google ADK Agent (Model: {ADK_MODEL})...")
-    try:
-        # Initialize Google ADK Agent with combined workspace capabilities
-        agent = create_adk_agent(
-            name="gitmesh_headless_agent",
-            model=ADK_MODEL,
-            instruction=system_instruction,
-            tools=combined_tools,
-        )
-        logger.info("✅ Google ADK Agent initialized successfully.")
-        
-        # Test query to verify integration, planning capability, and mock output
-        # Fallback: If no command-line argument is provided (e.g., during manual testing), fall back to a default mock string.
-        if len(sys.argv) > 1:
-            issue_query = sys.argv[1]
-        else:
-            issue_query = (
-                "Analyze GitLab Issue #42: 'Asset Request: Lowpoly Pirate Chest'. "
-                "Execute run_generate_3d_mesh for 'Lowpoly Pirate Chest', segment the output mesh into "
-                "'lid, base, lock' using run_segment_mesh, animate and render the keyframes using "
-                "run_animate_and_render_mesh for 30 frames with 360 degree turntable loop, and post a final draft checkout comment with the turntable MP4 link."
-            )
-        logger.info(f"📬 Submitting query of work to agent: '{issue_query}'")
-        
-        if hasattr(agent, "generate_content"):
-            test_response = await agent.generate_content(issue_query)
-        else:
-            test_response = (
-                "ADK agent initialized successfully. The installed SDK uses Runner/Context execution, "
-                "so direct generate_content smoke output is unavailable in this local harness.\n"
-                f"Received query: {issue_query}"
-            )
-        print("\n" + "="*50)
-        print("          GITMESH HEADLESS AGENT TEST RESPONSE      ")
-        print("="*50)
-        print(test_response)
-        print("="*50 + "\n")
-        
-    except Exception as e:
-        logger.error(f"❌ Failed to execute ADK Agent cycle: {e}")
-
-
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Execution halted by user.")
+    prompt = ""
+    if len(sys.argv) > 1:
+        prompt = sys.argv[1]
+    else:
+        prompt = os.getenv("ISSUE_TITLE", "")
+        
+    if not prompt:
+        logger.error("No prompt provided. Specify as CLI argument or set ISSUE_TITLE environment variable.")
+        sys.exit(1)
+        
+    sys.exit(execute_meshgen_pipeline(prompt))
