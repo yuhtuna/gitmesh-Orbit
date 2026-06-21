@@ -211,7 +211,7 @@ function Upsert-GitLabWebhook {
         push_events = $false
         merge_requests_events = $false
         tag_push_events = $false
-        note_events = $true
+        note_events = $false
         enable_ssl_verification = $true
     }
 

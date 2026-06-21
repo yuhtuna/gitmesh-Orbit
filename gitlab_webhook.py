@@ -79,19 +79,9 @@ async def gitlab_issue_listener(req: Request):
         if inbound_token != expected_secret:
             raise HTTPException(status_code=401, detail="Invalid webhook token")
 
-    # Check if the webhook event is "Issue Opened" or "Issue Comment Created"
-    object_kind = body.get("object_kind")
-    action = body.get("object_attributes", {}).get("action")
-    noteable_type = body.get("object_attributes", {}).get("noteable_type")
-    note_text = body.get("object_attributes", {}).get("note", "")
-
-    is_issue_open = (object_kind == "issue" and action == "open")
-    is_issue_comment = (object_kind == "note" and noteable_type == "Issue")
-
-    if not (is_issue_open or is_issue_comment):
-        return {"status": "ignored_event", "reason": "Not an issue open or issue comment event"}
-
-    if is_issue_open:
+    # Check if the webhook event is "Issue Opened"
+    if body.get("object_kind") == "issue" and body.get("object_attributes", {}).get("action") == "open":
+        # Extract issue info
         issue_title = body.get("object_attributes", {}).get("title", "")
         issue_desc = body.get("object_attributes", {}).get("description", "")
         issue_iid = body.get("object_attributes", {}).get("iid", "")
@@ -104,105 +94,90 @@ async def gitlab_issue_listener(req: Request):
         # Extract the pure prompt by stripping "MeshGen:" from it
         prompt = issue_title.split(":", 1)[1].strip()
 
-    elif is_issue_comment:
-        # Check if the comment starts with "/meshgen" (case-insensitive)
-        if not note_text.lower().startswith("/meshgen"):
-            print("Ignored: Comment doesn't start with '/meshgen'")
-            return {"status": "ignored", "reason": "Missing /meshgen slash command"}
+        # Target project metadata for routing comments/uploads back.
+        target_project_id = source_project_id or gitlab_project_id
+        target_gitlab_url = (record.get("gitlab_url") or gitlab_url).rstrip("/")
+        ref = record.get("trigger_ref") or gitlab_trigger_ref
 
-        # Extract the prompt following the "/meshgen" slash command
-        parts = note_text.split(None, 1)
-        prompt = parts[1].strip() if len(parts) > 1 else ""
-        if not prompt:
-            print("Ignored: /meshgen command contains no prompt")
-            return {"status": "ignored", "reason": "Empty prompt description"}
+        # Duplicate-run guard: if a pipeline for the same issue is already
+        # pending/running, skip creating another one.
+        if gitlab_api_token:
+            def _get_json(api_url: str):
+                req_obj = urllib.request.Request(
+                    api_url,
+                    headers={"PRIVATE-TOKEN": gitlab_api_token},
+                )
+                with urllib.request.urlopen(req_obj, timeout=10) as resp:
+                    return json.loads(resp.read().decode("utf-8"))
 
-        # Extract issue info from the root "issue" payload object
-        issue_title = body.get("issue", {}).get("title", "")
-        issue_desc = body.get("issue", {}).get("description", "")
-        issue_iid = body.get("issue", {}).get("iid", "")
-
-    # Target project metadata for routing comments/uploads back.
-    target_project_id = source_project_id or gitlab_project_id
-    target_gitlab_url = (record.get("gitlab_url") or gitlab_url).rstrip("/")
-    ref = record.get("trigger_ref") or gitlab_trigger_ref
-
-    # Duplicate-run guard: if a pipeline for the same issue is already
-    # pending/running, skip creating another one.
-    if gitlab_api_token:
-        def _get_json(api_url: str):
-            req_obj = urllib.request.Request(
-                api_url,
-                headers={"PRIVATE-TOKEN": gitlab_api_token},
-            )
-            with urllib.request.urlopen(req_obj, timeout=10) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-
-        def _find_active_duplicate() -> str:
-            base = f"{gitlab_url}/api/v4/projects/{gitlab_project_id}"
-            for status in ("running", "pending"):
-                try:
-                    pipelines = _get_json(
-                        f"{base}/pipelines?status={status}&order_by=id&sort=desc&per_page=25"
-                    )
-                except Exception as e:
-                    print(f"Duplicate check skipped ({status} list failed): {e}")
-                    continue
-
-                for pipeline in pipelines:
-                    pipeline_id = str(pipeline.get("id", "") or "").strip()
-                    if not pipeline_id:
-                        continue
+            def _find_active_duplicate() -> str:
+                base = f"{gitlab_url}/api/v4/projects/{gitlab_project_id}"
+                for status in ("running", "pending"):
                     try:
-                        vars_list = _get_json(f"{base}/pipelines/{pipeline_id}/variables")
-                    except Exception:
+                        pipelines = _get_json(
+                            f"{base}/pipelines?status={status}&order_by=id&sort=desc&per_page=25"
+                        )
+                    except Exception as e:
+                        print(f"Duplicate check skipped ({status} list failed): {e}")
                         continue
 
-                    vmap = {
-                        str(v.get("key", "")): str(v.get("value", ""))
-                        for v in vars_list if isinstance(v, dict)
-                    }
-                    same_issue = str(vmap.get("ISSUE_IID", "")).strip() == str(issue_iid).strip()
-                    same_target = str(vmap.get("TARGET_PROJECT_ID", target_project_id)).strip() == str(target_project_id).strip()
-                    if same_issue and same_target:
-                        return pipeline_id
-            return ""
+                    for pipeline in pipelines:
+                        pipeline_id = str(pipeline.get("id", "") or "").strip()
+                        if not pipeline_id:
+                            continue
+                        try:
+                            vars_list = _get_json(f"{base}/pipelines/{pipeline_id}/variables")
+                        except Exception:
+                            continue
 
-        existing_pipeline_id = _find_active_duplicate()
-        if existing_pipeline_id:
-            print(
-                f"Duplicate pipeline suppressed for issue #{issue_iid} "
-                f"(target project {target_project_id}). Existing pipeline: {existing_pipeline_id}"
-            )
-            return {
-                "status": "duplicate_suppressed",
-                "existing_pipeline_id": existing_pipeline_id,
-                "target_project_id": target_project_id,
-            }
+                        vmap = {
+                            str(v.get("key", "")): str(v.get("value", ""))
+                            for v in vars_list if isinstance(v, dict)
+                        }
+                        same_issue = str(vmap.get("ISSUE_IID", "")).strip() == str(issue_iid).strip()
+                        same_target = str(vmap.get("TARGET_PROJECT_ID", target_project_id)).strip() == str(target_project_id).strip()
+                        if same_issue and same_target:
+                            return pipeline_id
+                return ""
 
-    print(f"Triggering 3D Pipeline for prompt: {prompt} (target project {target_project_id})")
+            existing_pipeline_id = _find_active_duplicate()
+            if existing_pipeline_id:
+                print(
+                    f"Duplicate pipeline suppressed for issue #{issue_iid} "
+                    f"(target project {target_project_id}). Existing pipeline: {existing_pipeline_id}"
+                )
+                return {
+                    "status": "duplicate_suppressed",
+                    "existing_pipeline_id": existing_pipeline_id,
+                    "target_project_id": target_project_id,
+                }
 
-    url = f"{gitlab_url}/api/v4/projects/{gitlab_project_id}/trigger/pipeline"
-    form_data = urllib.parse.urlencode({
-        "token": gitlab_trigger_token,
-        "ref": ref,
-        "variables[ISSUE_TITLE]": prompt,
-        "variables[ISSUE_DESC]": issue_desc,
-        "variables[ISSUE_IID]": issue_iid,
-        "variables[TARGET_PROJECT_ID]": target_project_id,
-        "variables[TARGET_GITLAB_URL]": target_gitlab_url,
-    }).encode("utf-8")
+        print(f"Triggering 3D Pipeline for prompt: {prompt} (target project {target_project_id})")
 
-    # Call out to GitLab CI API
-    request = urllib.request.Request(url, data=form_data)
-    try:
-        with urllib.request.urlopen(request) as response:
-            print("Pipeline triggered successfully! Response:", response.read().decode())
-            return {
-                "status": "triggered",
-                "pipeline_branch": ref,
-                "target_project_id": target_project_id,
-            }
-    except Exception as e:
-        print(f"Error triggering pipeline: {e}")
-        return {"status": "error", "message": str(e)}
+        url = f"{gitlab_url}/api/v4/projects/{gitlab_project_id}/trigger/pipeline"
+        form_data = urllib.parse.urlencode({
+            "token": gitlab_trigger_token,
+            "ref": ref,
+            "variables[ISSUE_TITLE]": prompt,
+            "variables[ISSUE_DESC]": issue_desc,
+            "variables[ISSUE_IID]": issue_iid,
+            "variables[TARGET_PROJECT_ID]": target_project_id,
+            "variables[TARGET_GITLAB_URL]": target_gitlab_url,
+        }).encode("utf-8")
+
+        # Call out to GitLab CI API
+        request = urllib.request.Request(url, data=form_data)
+        try:
+            with urllib.request.urlopen(request) as response:
+                print("Pipeline triggered successfully! Response:", response.read().decode())
+                return {
+                    "status": "triggered",
+                    "pipeline_branch": ref,
+                    "target_project_id": target_project_id,
+                }
+        except Exception as e:
+            print(f"Error triggering pipeline: {e}")
+            return {"status": "error", "message": str(e)}
+
+    # Ignore comments, issue updates, or other events
+    return {"status": "ignored_event"}
