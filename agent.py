@@ -242,16 +242,19 @@ def create_gitlab_merge_request(project_id: str, local_file_path: str, target_re
 
     # Step C: Merge Request Creation
     mr_url = f"{gitlab_url}/api/v4/projects/{encoded_project_id}/merge_requests"
+    mr_description = (
+        f"This Merge Request contains the auto-generated and physically scaled 3D asset **{asset_name}**.\n\n"
+        f"It was automatically scaled and generated using the **Trellis 2** pipeline "
+        f"based on Orbit repository metadata constraints."
+    )
+    if os.getenv('ISSUE_IID'):
+        mr_description += f"\n\nCloses #{os.getenv('ISSUE_IID')}"
+
     mr_payload = {
         "source_branch": branch_name,
         "target_branch": default_branch,
         "title": f"GitMesh: Auto-Generated Asset - {asset_name}",
-        "description": (
-            f"This Merge Request contains the auto-generated and physically scaled 3D asset **{asset_name}**.\n\n"
-            f"It was automatically scaled and generated using the **Trellis 2** pipeline "
-            f"based on Orbit repository metadata constraints.\n\n"
-            f"Closes #{os.getenv('ISSUE_IID', '')}" if os.getenv('ISSUE_IID') else ""
-        )
+        "description": mr_description
     }
     logger.info("Step C: Creating Merge Request from '%s' to '%s'...", branch_name, default_branch)
     try:
@@ -274,7 +277,9 @@ def execute_meshgen_pipeline(user_prompt: str) -> int:
     logger.info("Executing Meshgen Pipeline (Phase 4)...")
     
     # Load configuration
-    token = _get_env("GITLAB_PRIVATE_TOKEN")
+    token = os.getenv("GITLAB_PRIVATE_TOKEN", "").strip() or os.getenv("GITLAB_API_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError("Missing required environment variable: GITLAB_PRIVATE_TOKEN or GITLAB_API_TOKEN")
     project_id = os.getenv("CI_PROJECT_ID", "").strip() or os.getenv("GITLAB_PROJECT_ID", "").strip() or "yuhtuna-group/gitmesh-orbit"
     issue_iid = os.getenv("ISSUE_IID", "").strip()
     auto_close_issue = os.getenv("AUTO_CLOSE_ISSUE", "true").strip().lower() == "true"
@@ -390,7 +395,7 @@ def execute_meshgen_pipeline(user_prompt: str) -> int:
 
 if __name__ == "__main__":
     prompt = ""
-    if len(sys.argv) > 1:
+    if len(sys.argv) > 1 and sys.argv[1] != "--remote-ci":
         prompt = sys.argv[1]
     else:
         prompt = os.getenv("ISSUE_TITLE", "")

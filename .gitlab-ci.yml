@@ -13,8 +13,8 @@ variables:
   SKIP_MODAL_SECRET_PREFLIGHT: "true"
   ALLOW_DUPLICATE_RUNS: "false"
   LLM_PROVIDER: "vertex"
-  USE_ADK_ORCHESTRATOR: "false"
-  ADK_HARD_FAIL: "false"
+  USE_ADK_ORCHESTRATOR: "true"
+  ADK_HARD_FAIL: "true"
   PIPELINE_DRY_RUN: "false"
   AUTO_CLOSE_ISSUE: "true"
   ISSUE_TITLE: "Fallback Prompt"
@@ -217,7 +217,7 @@ run_gitmesh_pipeline:
       case "${QUALITY_MODE:-med}" in
         low)
           export USE_SINGLE_CALL_PIPELINE="true"
-          export USE_ADK_ORCHESTRATOR="false"
+          export USE_ADK_ORCHESTRATOR="true"
           export USE_FAST_TRELLIS_MODE="true"
           export USE_FAST_RENDER_MODE="true"
           export SKIP_MODAL_SECRET_PREFLIGHT="true"
@@ -225,7 +225,7 @@ run_gitmesh_pipeline:
           ;;
         med)
           export USE_SINGLE_CALL_PIPELINE="true"
-          export USE_ADK_ORCHESTRATOR="false"
+          export USE_ADK_ORCHESTRATOR="true"
           export USE_FAST_TRELLIS_MODE="false"
           export USE_FAST_RENDER_MODE="true"
           export SKIP_MODAL_SECRET_PREFLIGHT="true"
