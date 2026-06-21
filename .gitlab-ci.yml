@@ -132,6 +132,9 @@ run_gitmesh_pipeline:
       fi
     }
 
+    echo "Installing job dependencies..."
+    pip install --no-cache-dir -r requirements.txt
+
     echo "Running GitMesh remote preflight checks..."
     require_var GITLAB_API_TOKEN
 
@@ -285,7 +288,6 @@ run_gitmesh_pipeline:
       echo " GitMesh ADK-first orchestration enabled"
       echo " ADK_HARD_FAIL=${ADK_HARD_FAIL:-false}"
       echo "============================================="
-      pip install --no-cache-dir -r requirements.txt
       if python agent.py --remote-ci; then
         echo "ADK orchestrator completed successfully."
         exit 0
@@ -309,9 +311,7 @@ run_gitmesh_pipeline:
     echo " Prompt: ${ISSUE_TITLE}"
     echo "============================================="
     curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🚀 GitMesh Pipeline Started! Asset: ${ISSUE_TITLE} (Issue #${ISSUE_IID}, 10 stages)" "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
-    if ! command -v modal >/dev/null 2>&1; then
-      pip install --no-cache-dir modal
-    fi
+    # Dependencies already installed at start of job
     if [ "${SKIP_MODAL_SECRET_PREFLIGHT:-true}" != "true" ]; then
       if ! modal secret list | grep -q "gitmesh-keys"; then
         echo "Modal secret 'gitmesh-keys' was not found. Create it with GCP_PROJECT_ID, GCP_SERVICE_ACCOUNT_JSON, LLM_PROVIDER=vertex, and IMAGE_MODEL."
