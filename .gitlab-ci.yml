@@ -155,27 +155,26 @@ run_gitmesh_pipeline:
       )"
     fi
 
-    if [ -z "${ISSUE_IID:-}" ]; then
-      echo "Unable to resolve ISSUE_IID automatically. Provide ISSUE_IID explicitly or open a MeshGen issue first."
-      exit 1
-    fi
-
-    if [ -z "${ISSUE_TITLE:-}" ] || [ "${ISSUE_TITLE}" = "Fallback Prompt" ]; then
-      echo "ISSUE_TITLE not provided (or fallback). Fetching title for issue #${ISSUE_IID}..."
-      ISSUE_TITLE="$(
-        curl --silent --show-error --fail \
-          --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" \
-          "${GITLAB_API_URL}/issues/${ISSUE_IID}" \
-        | python -c "import json,sys,re; t=(json.load(sys.stdin).get('title') or '').strip(); t=re.sub(r'^meshgen:\s*','',t,flags=re.I); print(t)"
-      )"
+    if [ -n "${ISSUE_IID:-}" ]; then
+      if [ -z "${ISSUE_TITLE:-}" ] || [ "${ISSUE_TITLE}" = "Fallback Prompt" ]; then
+        echo "ISSUE_TITLE not provided (or fallback). Fetching title for issue #${ISSUE_IID}..."
+        ISSUE_TITLE="$(
+          curl --silent --show-error --fail \
+            --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" \
+            "${GITLAB_API_URL}/issues/${ISSUE_IID}" \
+          | python -c "import json,sys,re; t=(json.load(sys.stdin).get('title') or '').strip(); t=re.sub(r'^meshgen:\s*','',t,flags=re.I); print(t)"
+        )"
+      fi
+      echo "Issue context resolved: ISSUE_IID=${ISSUE_IID}, ISSUE_TITLE=${ISSUE_TITLE}"
+    else
+      echo "No issue context. Proceeding in issue-less mode (Duo Chat trigger). Prompt: ${ISSUE_TITLE}"
     fi
 
     require_var ISSUE_TITLE
-    echo "Issue context resolved: ISSUE_IID=${ISSUE_IID}, ISSUE_TITLE=${ISSUE_TITLE}"
 
     # Single-flight guard: allow only one active pipeline per issue context.
     # Keep the oldest active pipeline and exit newer duplicates cleanly.
-    if [ "${ALLOW_DUPLICATE_RUNS:-false}" != "true" ]; then
+    if [ -n "${ISSUE_IID:-}" ] && [ "${ALLOW_DUPLICATE_RUNS:-false}" != "true" ]; then
       KEEPER_PIPELINE_ID=""
       ACTIVE_PIPELINE_IDS="$({
         for status in pending running; do
@@ -295,7 +294,9 @@ run_gitmesh_pipeline:
       fi
 
       echo "ADK orchestrator failed with status ${adk_status}."
-      curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=⚠️ GitMesh ADK orchestrator failed with status ${adk_status}. ${ADK_HARD_FAIL:-false} determines whether legacy fallback runs." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
+      if [ -n "${ISSUE_IID:-}" ]; then
+        curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=⚠️ GitMesh ADK orchestrator failed with status ${adk_status}. ${ADK_HARD_FAIL:-false} determines whether legacy fallback runs." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
+      fi
       if [ "${ADK_HARD_FAIL:-false}" = "true" ]; then
         exit "${adk_status}"
       fi
