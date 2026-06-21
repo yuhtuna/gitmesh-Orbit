@@ -338,7 +338,7 @@ def execute_meshgen_pipeline(user_prompt: str) -> int:
             "status": "success",
             "glb_path": "mesh.glb",
             "file_size_kb": 180.0,
-            "glb_base64": "MOCK_BASE64_GLB_DATA"
+            "glb_base64": "TW9jayBHRkIgY29udGVudHM=" # Decodes to "Mock GFB contents"
         }
         
     glb_path = result.get("glb_path", "mesh.glb")
@@ -371,8 +371,8 @@ def execute_meshgen_pipeline(user_prompt: str) -> int:
         
         # Massive Success Message
         print("\n" + "*"*80)
-        print("🎉 SUCCESS: GitMesh: Orbit Pipeline Completed successfully!")
-        print(f"🔗 Merge Request Link: {mr_url}")
+        print("SUCCESS: GitMesh: Orbit Pipeline Completed successfully!")
+        print(f"Merge Request Link: {mr_url}")
         print("*"*80 + "\n")
         
         comment_body = f"🎉 **Merge Request created successfully!**\n\n- [View Merge Request]({mr_url})\n- Target path: `{target_repo_path}`"
