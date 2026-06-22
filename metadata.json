@@ -2,6 +2,24 @@
   "name": "GitMesh Orbit",
   "description": "An AI Technical Artist that uses GitLab Orbit to retrieve 3D spatial context (folder limits, polygon counts) before generating and auto-committing scaled 3D meshes.",
   "trigger_keyword": "Meshgen:",
+  "slash_command": "/meshgen",
+  "input_parameters": {
+    "type": "object",
+    "properties": {
+      "asset_description": {
+        "type": "string",
+        "description": "A textual description of the 3D asset to generate (e.g., 'a rustic medieval treasure chest')"
+      }
+    },
+    "required": [
+      "asset_description"
+    ]
+  },
+  "required_capabilities": [
+    "repository_read",
+    "merge_request_write",
+    "orbit_graph_query"
+  ],
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

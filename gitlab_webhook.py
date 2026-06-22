@@ -72,10 +72,17 @@ async def gitlab_issue_listener(req: Request):
         except Exception as e:
             print(f"[Registry] lookup failed for project {source_project_id}: {e}")
 
-    # Per-project webhook secret if onboarded, else engine-level default.
+    # Auth check: accept token in x-gitlab-token, Authorization: Bearer, or ?secret= param
     expected_secret = record.get("webhook_secret") or gitlab_webhook_secret
     if expected_secret:
-        inbound_token = req.headers.get("x-gitlab-token", "")
+        inbound_token = req.headers.get("x-gitlab-token", "").strip()
+        if not inbound_token:
+            auth_header = req.headers.get("authorization", "").strip()
+            if auth_header.lower().startswith("bearer "):
+                inbound_token = auth_header[7:].strip()
+        if not inbound_token:
+            inbound_token = req.query_params.get("secret", "").strip()
+            
         if inbound_token != expected_secret:
             raise HTTPException(status_code=401, detail="Invalid webhook token")
 
@@ -108,11 +115,15 @@ async def gitlab_issue_listener(req: Request):
         prompt = issue_title.split(":", 1)[1].strip()
     else:
         # Duo Chat trigger
-        if duo_content.lower().startswith("meshgen:"):
-            prompt = duo_content.split(":", 1)[1].strip()
+        cleaned_content = duo_content.strip()
+        if cleaned_content.lower().startswith("/meshgen:"):
+            prompt = cleaned_content[9:].strip()
+        elif cleaned_content.lower().startswith("/meshgen"):
+            prompt = cleaned_content[8:].strip()
+        elif cleaned_content.lower().startswith("meshgen:"):
+            prompt = cleaned_content[8:].strip()
         else:
-            parts = duo_content.split(None, 1)
-            prompt = parts[1].strip() if len(parts) > 1 else ""
+            prompt = cleaned_content
             
         if not prompt:
             print("Ignored: Duo Chat trigger contains no prompt")
