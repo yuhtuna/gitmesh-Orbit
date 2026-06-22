@@ -228,6 +228,14 @@ def parse_constraints_from_desc(desc: str) -> dict:
             result["max_poly_count"] = int(poly_match.group(1))
         except Exception:
             pass
+
+    # Look for quality: high (or low, med)
+    quality_match = re.search(r'(?:quality|quality_?mode|resolution)\s*:\s*(low|med|medium|high)', desc, re.I)
+    if quality_match:
+        qval = quality_match.group(1).strip().lower()
+        if qval == "medium":
+            qval = "med"
+        result["quality_mode"] = qval
             
     return result
 
@@ -383,7 +391,8 @@ def execute_meshgen_pipeline(user_prompt: str) -> int:
     project_id = os.getenv("TARGET_PROJECT_ID", "").strip() or os.getenv("CI_PROJECT_ID", "")
     issue_iid = os.getenv("ISSUE_IID", "").strip()
     auto_close_issue = os.getenv("AUTO_CLOSE_ISSUE", "true").strip().lower() == "true"
-    
+    quality_mode = os.getenv("QUALITY_MODE", "med").strip().lower()
+
     # Step A: Parse prompt
     asset_name = user_prompt
     if user_prompt.lower().startswith("meshgen:"):
@@ -402,7 +411,12 @@ def execute_meshgen_pipeline(user_prompt: str) -> int:
     # Parse explicit issue description overrides
     issue_desc_env = os.getenv("ISSUE_DESC", "")
     desc_overrides = parse_constraints_from_desc(issue_desc_env)
-    
+
+    # Allow issue description to override quality mode
+    if desc_overrides.get("quality_mode"):
+        quality_mode = desc_overrides["quality_mode"]
+        logger.info("Quality mode overridden by issue description: %s", quality_mode)
+
     # Merge settings in priority:
     # 1. Issue tracker overrides (explicitly requested by developer in ticket)
     # 2. GitLab Orbit RAG context (dynamic repository database constraints)
@@ -526,7 +540,7 @@ def execute_meshgen_pipeline(user_prompt: str) -> int:
         max_poly_count = inferred_poly_count
         logger.info("Using Gemini-inferred max polygon limit: %s", max_poly_count)
 
-    print(f"\n[⚡ SERVERLESS GPU] Routing task to Modal L4 (Style: {art_style} | Dimensions: {target_dimensions})...\n")
+    print(f"\n[⚡ SERVERLESS GPU] Routing task to Modal L4 (Style: {art_style} | Dimensions: {target_dimensions} | Quality: {quality_mode.upper()})...\n")
 
     # Step E: Trigger Trellis 3D mesh generation on Modal
     logger.info("Triggering TRELLIS 3D generation on Modal...")
@@ -540,7 +554,8 @@ def execute_meshgen_pipeline(user_prompt: str) -> int:
             prompt=asset_name,
             style=art_style,
             target_dimensions=target_dimensions,
-            image_base64=ref_image_b64
+            image_base64=ref_image_b64,
+            quality_mode=quality_mode
         )
     except Exception as exc:
         logger.error("Failed to run remote Modal execution: %s. Using mock fallback.", exc)

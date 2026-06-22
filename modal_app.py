@@ -353,7 +353,8 @@ def generate_3d_mesh(
     limit_y: Optional[float] = None,
     limit_z: Optional[float] = None,
     target_dimensions: list[float] = None,
-    image_base64: Optional[str] = None
+    image_base64: Optional[str] = None,
+    quality_mode: str = "med"
 ) -> Dict[str, Any]:
     if google_access_token:
         os.environ["GOOGLE_ACCESS_TOKEN"] = google_access_token
@@ -413,6 +414,16 @@ def generate_3d_mesh(
         print("⚠️ No reference image found or loaded. Using solid blue fallback image.")
         img = Image.new("RGB", (1024, 1024), color=(70, 130, 180))
 
+    # Quality tier presets: controls diffusion steps, mesh decimation, and texture resolution
+    QUALITY_PRESETS = {
+        "low":  {"sparse_steps": 8,  "slat_steps": 8,  "cfg_sparse": 7.5, "cfg_slat": 3.0, "simplify": 0.98, "texture_size": 512},
+        "med":  {"sparse_steps": 12, "slat_steps": 12, "cfg_sparse": 7.5, "cfg_slat": 3.0, "simplify": 0.95, "texture_size": 1024},
+        "high": {"sparse_steps": 20, "slat_steps": 20, "cfg_sparse": 7.5, "cfg_slat": 3.0, "simplify": 0.5,  "texture_size": 2048},
+    }
+    qm = quality_mode.strip().lower() if quality_mode else "med"
+    preset = QUALITY_PRESETS.get(qm, QUALITY_PRESETS["med"])
+    print(f"🎚️ Quality Mode: {qm.upper()} → steps={preset['sparse_steps']}/{preset['slat_steps']}, simplify={preset['simplify']}, texture={preset['texture_size']}px")
+
     try:
         from trellis.pipelines import TrellisImageTo3DPipeline
         from trellis.utils import postprocessing_utils
@@ -424,15 +435,15 @@ def generate_3d_mesh(
         outputs = pipeline.run(
             img,
             seed=42,
-            sparse_structure_sampler_params={"steps": 12, "cfg_strength": 7.5},
-            slat_sampler_params={"steps": 12, "cfg_strength": 3.0}
+            sparse_structure_sampler_params={"steps": preset["sparse_steps"], "cfg_strength": preset["cfg_sparse"]},
+            slat_sampler_params={"steps": preset["slat_steps"], "cfg_strength": preset["cfg_slat"]}
         )
 
         glb = postprocessing_utils.to_glb(
             outputs['gaussian'][0],
             outputs['mesh'][0],
-            simplify=0.95,
-            texture_size=1024
+            simplify=preset["simplify"],
+            texture_size=preset["texture_size"]
         )
         glb.export(glb_path)
         print(f"✅ TRELLIS 3D Generation successful. Exported to {glb_path}")
