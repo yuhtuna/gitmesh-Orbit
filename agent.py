@@ -40,7 +40,7 @@ def _get_env(name: str, required: bool = True, default: str = "") -> str:
 def _post_gitlab_issue_comment(issue_iid: str, token: str, body: str) -> None:
     if not issue_iid or not token:
         return
-    project_id = os.getenv("CI_PROJECT_ID", "").strip() or os.getenv("GITLAB_PROJECT_ID", "").strip() or "yuhtuna-group/gitmesh-orbit"
+    project_id = os.getenv("TARGET_PROJECT_ID", "").strip() or os.getenv("CI_PROJECT_ID", "").strip() or os.getenv("GITLAB_PROJECT_ID", "").strip() or "yuhtuna-group/gitmesh-orbit"
     encoded_project_id = urllib.parse.quote(project_id, safe='')
     gitlab_url = os.getenv("GITLAB_URL", "https://gitlab.com").strip().rstrip("/")
     url = f"{gitlab_url}/api/v4/projects/{encoded_project_id}/issues/{urllib.parse.quote(str(issue_iid), safe='')}/notes"
@@ -56,7 +56,7 @@ def _post_gitlab_issue_comment(issue_iid: str, token: str, body: str) -> None:
 def _close_gitlab_issue(issue_iid: str, token: str) -> None:
     if not issue_iid or not token:
         return
-    project_id = os.getenv("CI_PROJECT_ID", "").strip() or os.getenv("GITLAB_PROJECT_ID", "").strip() or "yuhtuna-group/gitmesh-orbit"
+    project_id = os.getenv("TARGET_PROJECT_ID", "").strip() or os.getenv("CI_PROJECT_ID", "").strip() or os.getenv("GITLAB_PROJECT_ID", "").strip() or "yuhtuna-group/gitmesh-orbit"
     encoded_project_id = urllib.parse.quote(project_id, safe='')
     gitlab_url = os.getenv("GITLAB_URL", "https://gitlab.com").strip().rstrip("/")
     url = f"{gitlab_url}/api/v4/projects/{encoded_project_id}/issues/{urllib.parse.quote(str(issue_iid), safe='')}"
@@ -377,7 +377,7 @@ def execute_meshgen_pipeline(user_prompt: str) -> int:
     token = os.getenv("GITLAB_PRIVATE_TOKEN", "").strip() or os.getenv("GITLAB_API_TOKEN", "").strip()
     if not token:
         raise RuntimeError("Missing required environment variable: GITLAB_PRIVATE_TOKEN or GITLAB_API_TOKEN")
-    project_id = os.getenv("CI_PROJECT_ID", "").strip() or os.getenv("GITLAB_PROJECT_ID", "").strip() or "yuhtuna-group/gitmesh-orbit"
+    project_id = os.getenv("TARGET_PROJECT_ID", "").strip() or os.getenv("CI_PROJECT_ID", "").strip() or os.getenv("GITLAB_PROJECT_ID", "").strip() or "yuhtuna-group/gitmesh-orbit"
     issue_iid = os.getenv("ISSUE_IID", "").strip()
     auto_close_issue = os.getenv("AUTO_CLOSE_ISSUE", "true").strip().lower() == "true"
     
