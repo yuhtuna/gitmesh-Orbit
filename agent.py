@@ -3,7 +3,8 @@
 agent.py - Orchestrator for GitMesh: Orbit (Phase 4).
 
 Coordinates prompt retrieval, GitLab Orbit API context queries,
-Trellis 3D generation via Modal, and GitLab commits/MR write-back.
+Gemini reference image generation, Trellis 3D generation via Modal,
+and GitLab commits/MR write-back.
 """
 
 import os
@@ -271,8 +272,8 @@ def create_gitlab_merge_request(project_id: str, local_file_path: str, target_re
 
 def execute_meshgen_pipeline(user_prompt: str) -> int:
     """
-    Coordinates prompt retrieval, Orbit context query, Trellis generation on Modal,
-    and Merge Request creation.
+    Coordinates prompt retrieval, Orbit context query, Gemini reference image
+    generation, Trellis 3D generation on Modal, and Merge Request creation.
     """
     logger.info("Executing Meshgen Pipeline (Phase 4)...")
     
@@ -325,14 +326,37 @@ def execute_meshgen_pipeline(user_prompt: str) -> int:
     print(f"Target Folder:      {target_folder}")
     print("==================================================================\n")
 
-    # Step D: Trigger Modal generation
-    logger.info("Triggering TRELLIS generation on Modal...")
-    _post_gitlab_issue_comment(issue_iid, token, "⚡ **Generating reference image and 3D mesh via Trellis 2 on Modal (with physical scaling)**...")
+    # Step D: Generate reference image via Gemini/Vertex on Modal
+    logger.info("Generating reference image via Gemini on Modal...")
+    _post_gitlab_issue_comment(issue_iid, token, "📷 **Generating reference image via Gemini** (text → concept image for Trellis input)...")
     
     try:
         import modal
-        func = modal.Function.from_name("gitmesh-compute", "generate_3d_mesh")
-        result = func.remote(
+        ref_func = modal.Function.from_name("gitmesh-compute", "generate_reference_image")
+        ref_result = ref_func.remote(
+            prompt=enriched_prompt,
+            issue_desc=os.getenv("ISSUE_DESC", ""),
+        )
+        ref_status = ref_result.get("status", "unknown")
+        enhanced_prompt = ref_result.get("enhanced_prompt", enriched_prompt)
+        logger.info("Reference image generation status: %s (enhanced prompt: '%s')", ref_status, enhanced_prompt[:100])
+        _post_gitlab_issue_comment(
+            issue_iid, token,
+            f"✅ **Reference image generated.** Enhanced prompt: `{enhanced_prompt[:120]}`"
+        )
+    except Exception as exc:
+        logger.warning("Reference image generation failed: %s. Trellis will use procedural fallback.", exc)
+        _post_gitlab_issue_comment(issue_iid, token, f"⚠️ Reference image generation failed: `{exc}`. Trellis will use procedural fallback.")
+
+    # Step E: Trigger Trellis 3D mesh generation on Modal
+    logger.info("Triggering TRELLIS 3D generation on Modal...")
+    _post_gitlab_issue_comment(issue_iid, token, "⚡ **Generating 3D mesh via Trellis 2 on Modal** (image → 3D with physical scaling)...")
+    
+    try:
+        if "modal" not in dir():
+            import modal
+        mesh_func = modal.Function.from_name("gitmesh-compute", "generate_3d_mesh")
+        result = mesh_func.remote(
             prompt=asset_name,
             style=art_style or "lowpoly",
             target_dimensions=target_dimensions
@@ -343,7 +367,7 @@ def execute_meshgen_pipeline(user_prompt: str) -> int:
             "status": "success",
             "glb_path": "mesh.glb",
             "file_size_kb": 180.0,
-            "glb_base64": "TW9jayBHRkIgY29udGVudHM=" # Decodes to "Mock GFB contents"
+            "glb_base64": "TW9jayBHRkIgY29udGVudHM="  # Decodes to "Mock GFB contents"
         }
         
     glb_path = result.get("glb_path", "mesh.glb")
@@ -361,7 +385,7 @@ def execute_meshgen_pipeline(user_prompt: str) -> int:
         with open(glb_path, "wb") as f:
             f.write(base64.b64decode(glb_b64))
 
-    # Step E: Commit & Merge Request write-back
+    # Step F: Commit & Merge Request write-back
     target_repo_path = f"{target_folder.strip('/')}/generated_mesh.glb"
     
     try:

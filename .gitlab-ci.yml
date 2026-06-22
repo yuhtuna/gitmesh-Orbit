@@ -13,8 +13,8 @@ variables:
   SKIP_MODAL_SECRET_PREFLIGHT: "true"
   ALLOW_DUPLICATE_RUNS: "false"
   LLM_PROVIDER: "vertex"
-  USE_ADK_ORCHESTRATOR: "true"
-  ADK_HARD_FAIL: "true"
+  USE_AGENT_ORCHESTRATOR: "true"
+  AGENT_HARD_FAIL: "true"
   PIPELINE_DRY_RUN: "false"
   AUTO_CLOSE_ISSUE: "true"
   ISSUE_TITLE: "Fallback Prompt"
@@ -217,7 +217,7 @@ run_gitmesh_pipeline:
       case "${QUALITY_MODE:-med}" in
         low)
           export USE_SINGLE_CALL_PIPELINE="true"
-          export USE_ADK_ORCHESTRATOR="true"
+          export USE_AGENT_ORCHESTRATOR="true"
           export USE_FAST_TRELLIS_MODE="true"
           export USE_FAST_RENDER_MODE="true"
           export SKIP_MODAL_SECRET_PREFLIGHT="true"
@@ -225,7 +225,7 @@ run_gitmesh_pipeline:
           ;;
         med)
           export USE_SINGLE_CALL_PIPELINE="true"
-          export USE_ADK_ORCHESTRATOR="true"
+          export USE_AGENT_ORCHESTRATOR="true"
           export USE_FAST_TRELLIS_MODE="false"
           export USE_FAST_RENDER_MODE="true"
           export SKIP_MODAL_SECRET_PREFLIGHT="true"
@@ -233,7 +233,7 @@ run_gitmesh_pipeline:
           ;;
         high)
           export USE_SINGLE_CALL_PIPELINE="true"
-          export USE_ADK_ORCHESTRATOR="true"
+          export USE_AGENT_ORCHESTRATOR="true"
           export USE_FAST_TRELLIS_MODE="false"
           export USE_FAST_RENDER_MODE="false"
           export SKIP_MODAL_SECRET_PREFLIGHT="false"
@@ -247,7 +247,7 @@ run_gitmesh_pipeline:
     fi
 
     echo "Runtime profile: QUALITY_MODE=${QUALITY_MODE} (USE_CUSTOM_FLAGS=${USE_CUSTOM_FLAGS})"
-    echo "Resolved flags: single_call=${USE_SINGLE_CALL_PIPELINE}, adk=${USE_ADK_ORCHESTRATOR}, fast_trellis=${USE_FAST_TRELLIS_MODE}, fast_render=${USE_FAST_RENDER_MODE}, skip_secret_preflight=${SKIP_MODAL_SECRET_PREFLIGHT}, diagnostics=${ENABLE_NETWORK_DIAGNOSTICS}"
+    echo "Resolved flags: single_call=${USE_SINGLE_CALL_PIPELINE}, agent=${USE_AGENT_ORCHESTRATOR}, fast_trellis=${USE_FAST_TRELLIS_MODE}, fast_render=${USE_FAST_RENDER_MODE}, skip_secret_preflight=${SKIP_MODAL_SECRET_PREFLIGHT}, diagnostics=${ENABLE_NETWORK_DIAGNOSTICS}"
 
     if [ "${PIPELINE_DRY_RUN:-false}" != "true" ]; then
       require_var MODAL_TOKEN_ID
@@ -283,26 +283,26 @@ run_gitmesh_pipeline:
       exit 0
     fi
 
-    if [ "${USE_ADK_ORCHESTRATOR:-true}" = "true" ]; then
+    if [ "${USE_AGENT_ORCHESTRATOR:-true}" = "true" ]; then
       echo "============================================="
-      echo " GitMesh ADK-first orchestration enabled"
-      echo " ADK_HARD_FAIL=${ADK_HARD_FAIL:-false}"
+      echo " GitMesh Agent Orchestrator enabled"
+      echo " AGENT_HARD_FAIL=${AGENT_HARD_FAIL:-true}"
       echo "============================================="
       if python agent.py --remote-ci; then
-        echo "ADK orchestrator completed successfully."
+        echo "Agent orchestrator completed successfully."
         exit 0
       else
-        adk_status="$?"
+        agent_status="$?"
       fi
 
-      echo "ADK orchestrator failed with status ${adk_status}."
+      echo "Agent orchestrator failed with status ${agent_status}."
       if [ -n "${ISSUE_IID:-}" ]; then
-        curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=⚠️ GitMesh ADK orchestrator failed with status ${adk_status}. ${ADK_HARD_FAIL:-false} determines whether legacy fallback runs." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
+        curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=⚠️ GitMesh agent orchestrator failed with status ${agent_status}. AGENT_HARD_FAIL=${AGENT_HARD_FAIL:-true} determines whether legacy fallback runs." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
       fi
-      if [ "${ADK_HARD_FAIL:-false}" = "true" ]; then
-        exit "${adk_status}"
+      if [ "${AGENT_HARD_FAIL:-true}" = "true" ]; then
+        exit "${agent_status}"
       fi
-      echo "ADK_HARD_FAIL=false: falling back to direct Modal stage chain."
+      echo "AGENT_HARD_FAIL=false: falling back to direct Modal stage chain."
     fi
 
     echo "============================================="
