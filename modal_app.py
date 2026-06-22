@@ -461,7 +461,8 @@ def generate_3d_mesh(
             if factors:
                 scale_factor = min(factors)
                 print(f"Applying uniform scale factor: {scale_factor}")
-                mesh.apply_scale(scale_factor)
+                matrix = trimesh.transformations.scale_matrix(scale_factor)
+                mesh.apply_transform(matrix)
                 mesh.export(glb_path)
                 print(f"Scaled mesh exported. New extents: {mesh.extents}")
         except Exception as scale_err:
