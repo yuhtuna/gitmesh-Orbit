@@ -366,6 +366,29 @@ def create_gitlab_merge_request(project_id: str, local_file_path: str, target_re
         logger.error("Merge Request request failed: %s", exc)
         raise
 
+def execute_meshgen_pipeline(user_prompt: str) -> int:
+    """
+    Coordinates prompt retrieval, Orbit context query, Gemini reference image
+    generation, Trellis 3D generation on Modal, and Merge Request creation.
+    """
+    logger.info("Executing Meshgen Pipeline (Phase 4)...")
+    
+    # Load configuration
+    token = os.getenv("GITLAB_PRIVATE_TOKEN", "").strip() or os.getenv("GITLAB_API_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError("Missing required environment variable: GITLAB_PRIVATE_TOKEN or GITLAB_API_TOKEN")
+    project_id = os.getenv("CI_PROJECT_ID", "").strip() or os.getenv("GITLAB_PROJECT_ID", "").strip() or "yuhtuna-group/gitmesh-orbit"
+    issue_iid = os.getenv("ISSUE_IID", "").strip()
+    auto_close_issue = os.getenv("AUTO_CLOSE_ISSUE", "true").strip().lower() == "true"
+    
+    # Step A: Parse prompt
+    asset_name = user_prompt
+    if user_prompt.lower().startswith("meshgen:"):
+        asset_name = user_prompt[8:].strip()
+        
+    logger.info("Parsed Asset Name: '%s'", asset_name)
+    _post_gitlab_issue_comment(issue_iid, token, f"🤖 **GitMesh: Orbit orchestrator started** for asset: `{asset_name}`")
+
     # Step B: Hierarchical Context Resolution
     logger.info("Retrieving context from GitLab Orbit API...")
     orbit_context = query_gitlab_orbit(project_id, asset_name, token)
