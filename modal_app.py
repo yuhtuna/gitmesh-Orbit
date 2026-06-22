@@ -244,20 +244,57 @@ def generate_reference_image(
     os.makedirs(storage_dir, exist_ok=True)
     ref_path = os.path.join(storage_dir, "reference.png")
 
-    # Enhance prompt
-    gemini_api_key = os.environ.get("GEMINI_API_KEY")
+    # Enhance prompt and categorize
     enhanced_prompt = prompt
+    category = "prop"
+    subcategory = "general"
+    filename = prompt.lower().replace(" ", "_")
+    inferred_dimensions = [800.0, 400.0, 300.0]
+    inferred_poly_count = 3000
+
+    gemini_api_key = os.environ.get("GEMINI_API_KEY")
     ai_instruction = (
-        f"Rewrite this into a descriptive physical prompt optimized for 3D generation: '{prompt}. {issue_desc}'"
+        f"You are a 3D game asset classification, prompt enhancement, and scaling AI.\n"
+        f"Analyze this request for a 3D asset: '{prompt}. {issue_desc}'\n"
+        f"Generate a JSON object with the following fields:\n"
+        f"1. 'enhanced_prompt': A descriptive physical prompt optimized for 3D generation models (describing details, materials, lighting, isolate on a gray background, etc.).\n"
+        f"2. 'category': A single word category for this asset (e.g., castle, house, weapon, furniture, vehicle, character, prop, etc.). Keep it lowercase.\n"
+        f"3. 'subcategory': A single word subcategory (e.g., door, chair, table, sword, pistol, tree, etc.). Keep it lowercase.\n"
+        f"4. 'filename': A clean slugified filename (words separated by underscores, e.g., laser_pistol, wooden_door). Do not include file extension.\n"
+        f"5. 'inferred_dimensions': A 3-element float list [x, y, z] in millimeters representing realistic bounding dimensions for this object (e.g. a sword could be [200.0, 50.0, 1200.0], a door [1000.0, 100.0, 2100.0], a chair [600.0, 600.0, 950.0], a chest [800.0, 500.0, 500.0]).\n"
+        f"6. 'inferred_poly_count': An integer budget representing a target polygon limit for this asset type (e.g., 2000 for props, 4000 for weapons, 5000 for animated furniture).\n"
+        f"Return ONLY a valid JSON object. Do not add any markdown formatting or comments outside the JSON."
     )
     
     res = _call_gemini_vertex(ai_instruction, "gemini-3.5-flash")
-    if res:
-        enhanced_prompt = res
-    else:
+    if not res:
         res = _call_gemini_api(ai_instruction, "gemini-3.5-flash", gemini_api_key=gemini_api_key)
-        if res:
-            enhanced_prompt = res
+        
+    if res:
+        try:
+            # Clean up markdown code blocks if any
+            clean_res = res.strip()
+            if clean_res.startswith("```"):
+                lines = clean_res.splitlines()
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].startswith("```"):
+                    lines = lines[:-1]
+                clean_res = "\n".join(lines).strip()
+            
+            data = json.loads(clean_res)
+            enhanced_prompt = data.get("enhanced_prompt", prompt)
+            category = data.get("category", "prop").strip().lower()
+            subcategory = data.get("subcategory", "general").strip().lower()
+            filename = data.get("filename", prompt.lower().replace(" ", "_")).strip().lower()
+            filename = "".join(c for c in filename if c.isalnum() or c in "_-")
+            
+            if "inferred_dimensions" in data and isinstance(data["inferred_dimensions"], list) and len(data["inferred_dimensions"]) >= 3:
+                inferred_dimensions = [float(d) for d in data["inferred_dimensions"][:3]]
+            if "inferred_poly_count" in data:
+                inferred_poly_count = int(data["inferred_poly_count"])
+        except Exception as parse_err:
+            print(f"⚠️ Failed to parse classification JSON: {parse_err}. Response was: {res}")
 
     # Generate Image
     img_bytes = _generate_imagen_vertex(enhanced_prompt)
@@ -284,7 +321,12 @@ def generate_reference_image(
         "status": "success",
         "reference_path": ref_path,
         "enhanced_prompt": enhanced_prompt,
-        "image_base64": img_base64
+        "image_base64": img_base64,
+        "category": category,
+        "subcategory": subcategory,
+        "filename": filename,
+        "inferred_dimensions": inferred_dimensions,
+        "inferred_poly_count": inferred_poly_count
     }
 
 @app.function(
@@ -302,7 +344,8 @@ def generate_3d_mesh(
     limit_x: Optional[float] = None,
     limit_y: Optional[float] = None,
     limit_z: Optional[float] = None,
-    target_dimensions: list[float] = None
+    target_dimensions: list[float] = None,
+    image_base64: Optional[str] = None
 ) -> Dict[str, Any]:
     if google_access_token:
         os.environ["GOOGLE_ACCESS_TOKEN"] = google_access_token
@@ -321,12 +364,45 @@ def generate_3d_mesh(
     glb_filename = f"mesh_{prompt.lower().replace(' ', '_')}_{style}.glb"
     glb_path = os.path.join(storage_dir, glb_filename)
 
-    # Load reference image if exists
-    concept_img_path = os.path.join(storage_dir, "reference.png")
+    # Load reference image if base64 provided, else fallback to file or solid blue
     from PIL import Image
-    if os.path.exists(concept_img_path):
-        img = Image.open(concept_img_path).convert("RGB")
-    else:
+    import io
+    
+    img = None
+    concept_img_path = os.path.join(storage_dir, "reference.png")
+    
+    if image_base64:
+        try:
+            print("📷 Loading reference image from base64 argument...")
+            img_data = base64.b64decode(image_base64)
+            img = Image.open(io.BytesIO(img_data)).convert("RGB")
+            
+            # Save it to the volume so subsequent stages can access it
+            img.save(concept_img_path)
+            print(f"📷 Saved base64 reference image to volume path: {concept_img_path}")
+            if storage_volume:
+                storage_volume.commit()
+                print("Storage volume committed successfully.")
+        except Exception as img_err:
+            print(f"⚠️ Failed to decode/save base64 reference image: {img_err}")
+            
+    if img is None:
+        if storage_volume:
+            try:
+                print("Re-syncing storage volume...")
+                storage_volume.reload()
+            except Exception as vol_err:
+                print(f"⚠️ Volume reload failed: {vol_err}")
+            
+        if os.path.exists(concept_img_path):
+            try:
+                img = Image.open(concept_img_path).convert("RGB")
+                print(f"📷 Loaded reference image from volume path: {concept_img_path}")
+            except Exception as read_err:
+                print(f"⚠️ Failed to read reference image from volume: {read_err}")
+                
+    if img is None:
+        print("⚠️ No reference image found or loaded. Using solid blue fallback image.")
         img = Image.new("RGB", (1024, 1024), color=(70, 130, 180))
 
     try:

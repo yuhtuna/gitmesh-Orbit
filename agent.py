@@ -162,6 +162,102 @@ def query_gitlab_orbit(project_id: str, query_text: str, gitlab_token: str) -> d
         logger.warning("Error querying GitLab Orbit API: %s. Using graceful fallback.", exc)
         return fallback
 
+def query_gitlab_repository_config(project_id: str, gitlab_token: str) -> dict:
+    """
+    Attempts to read orbit.json or gitmesh.json from the repository root.
+    """
+    encoded_project_id = urllib.parse.quote(project_id, safe='')
+    gitlab_url = os.getenv("GITLAB_URL", "https://gitlab.com").strip().rstrip("/")
+    
+    headers = {"PRIVATE-TOKEN": gitlab_token}
+    
+    for filename in ("orbit.json", "gitmesh.json"):
+        url = f"{gitlab_url}/api/v4/projects/{encoded_project_id}/repository/files/{urllib.parse.quote(filename, safe='')}/raw"
+        try:
+            logger.debug("Checking repository config file: %s", filename)
+            res = requests.get(url, headers=headers, params={"ref": "main"}, timeout=15)
+            if res.status_code == 200:
+                data = res.json()
+                logger.info("Found repository configuration from %s: %s", filename, data)
+                if isinstance(data, dict):
+                    return data
+        except Exception as exc:
+            logger.debug("Failed to query repository config %s: %s", filename, exc)
+    return {}
+
+def parse_constraints_from_desc(desc: str) -> dict:
+    """
+    Parses overrides from the issue description text.
+    Look for flags:
+      Style: lowpoly
+      Folder: Content/Props
+      Dimensions: [800, 400, 300]
+      Polycount: 3000
+    """
+    result = {}
+    if not desc:
+        return result
+    import re
+    # Look for style: lowpoly
+    style_match = re.search(r'(?:style|art\s*style)\s*:\s*([a-zA-Z0-9_-]+)', desc, re.I)
+    if style_match:
+        result["art_style"] = style_match.group(1).strip().lower()
+        
+    # Look for folder: Content/Props
+    folder_match = re.search(r'(?:folder|target\s*folder|path)\s*:\s*([a-zA-Z0-9_/-]+)', desc, re.I)
+    if folder_match:
+        result["target_folder"] = folder_match.group(1).strip()
+        
+    # Look for dimensions: [800, 400, 300] or 800, 400, 300
+    dim_match = re.search(r'(?:dimensions|limits|scale)\s*:\s*\[?([0-9.,\s]+)\]?', desc, re.I)
+    if dim_match:
+        try:
+            parts = re.split(r'[,\s]+', dim_match.group(1).strip())
+            dims = [float(p) for p in parts if p]
+            if len(dims) >= 3:
+                result["target_dimensions"] = dims[:3]
+        except Exception:
+            pass
+            
+    # Look for polycount: 3000
+    poly_match = re.search(r'(?:poly_?count|polygon_?limit|max_?poly)\s*:\s*([0-9]+)', desc, re.I)
+    if poly_match:
+        try:
+            result["max_poly_count"] = int(poly_match.group(1))
+        except Exception:
+            pass
+            
+    return result
+
+def upload_file_to_gitlab(project_id: str, local_filepath: str, gitlab_token: str) -> Optional[str]:
+    """
+    Uploads a file to the GitLab project uploads endpoint and returns the markdown link.
+    """
+    if not os.path.exists(local_filepath) or not gitlab_token:
+        return None
+    
+    encoded_project_id = urllib.parse.quote(project_id, safe='')
+    gitlab_url = os.getenv("GITLAB_URL", "https://gitlab.com").strip().rstrip("/")
+    url = f"{gitlab_url}/api/v4/projects/{encoded_project_id}/uploads"
+    
+    headers = {"PRIVATE-TOKEN": gitlab_token}
+    
+    logger.info("Uploading file %s to GitLab...", local_filepath)
+    try:
+        with open(local_filepath, "rb") as f:
+            files = {"file": (os.path.basename(local_filepath), f)}
+            res = requests.post(url, headers=headers, files=files, timeout=30)
+            if res.status_code in (200, 201):
+                data = res.json()
+                markdown_link = data.get("markdown")
+                logger.info("Uploaded successfully. Markdown link: %s", markdown_link)
+                return markdown_link
+            else:
+                logger.error("Failed to upload file to GitLab: %s", res.text)
+    except Exception as exc:
+        logger.error("Error uploading file to GitLab: %s", exc)
+    return None
+
 def create_gitlab_merge_request(project_id: str, local_file_path: str, target_repo_path: str, asset_name: str, gitlab_token: str) -> str:
     """
     Step A: Generate unique branch and create off main via API.
@@ -270,44 +366,55 @@ def create_gitlab_merge_request(project_id: str, local_file_path: str, target_re
         logger.error("Merge Request request failed: %s", exc)
         raise
 
-def execute_meshgen_pipeline(user_prompt: str) -> int:
-    """
-    Coordinates prompt retrieval, Orbit context query, Gemini reference image
-    generation, Trellis 3D generation on Modal, and Merge Request creation.
-    """
-    logger.info("Executing Meshgen Pipeline (Phase 4)...")
-    
-    # Load configuration
-    token = os.getenv("GITLAB_PRIVATE_TOKEN", "").strip() or os.getenv("GITLAB_API_TOKEN", "").strip()
-    if not token:
-        raise RuntimeError("Missing required environment variable: GITLAB_PRIVATE_TOKEN or GITLAB_API_TOKEN")
-    project_id = os.getenv("CI_PROJECT_ID", "").strip() or os.getenv("GITLAB_PROJECT_ID", "").strip() or "yuhtuna-group/gitmesh-orbit"
-    issue_iid = os.getenv("ISSUE_IID", "").strip()
-    auto_close_issue = os.getenv("AUTO_CLOSE_ISSUE", "true").strip().lower() == "true"
-    
-    # Step A: Parse prompt
-    asset_name = user_prompt
-    if user_prompt.lower().startswith("meshgen:"):
-        asset_name = user_prompt[8:].strip()
-        
-    logger.info("Parsed Asset Name: '%s'", asset_name)
-    _post_gitlab_issue_comment(issue_iid, token, f"🤖 **GitMesh: Orbit orchestrator started** for asset: `{asset_name}`")
-
-    # Step B: Query GitLab Orbit
-    logger.info("Retrieving context from GitLab Orbit...")
+    # Step B: Hierarchical Context Resolution
+    logger.info("Retrieving context from GitLab Orbit API...")
     orbit_context = query_gitlab_orbit(project_id, asset_name, token)
     
-    target_folder = orbit_context.get("target_folder", "Content/Generated/")
-    art_style = orbit_context.get("art_style")
-    max_poly_count = orbit_context.get("max_poly_count")
-    target_dimensions = orbit_context.get("target_dimensions")
+    # Check for repository configuration file
+    repo_config = query_gitlab_repository_config(project_id, token)
+    
+    # Parse explicit issue description overrides
+    issue_desc_env = os.getenv("ISSUE_DESC", "")
+    desc_overrides = parse_constraints_from_desc(issue_desc_env)
+    
+    # Merge settings in priority:
+    # 1. Issue tracker overrides (explicitly requested by developer in ticket)
+    # 2. GitLab Orbit RAG context (dynamic repository database constraints)
+    # 3. Repository config files (orbit.json/gitmesh.json static config)
+    # 4. Fallback defaults
+    
+    target_folder = (
+        desc_overrides.get("target_folder") or 
+        orbit_context.get("target_folder") or 
+        repo_config.get("target_folder") or 
+        "Content/Generated/"
+    )
+    
+    art_style = (
+        desc_overrides.get("art_style") or 
+        orbit_context.get("art_style") or 
+        repo_config.get("art_style") or 
+        ""
+    )
+    
+    max_poly_count = (
+        desc_overrides.get("max_poly_count") or 
+        orbit_context.get("max_poly_count") or 
+        repo_config.get("max_poly_count")
+    )
+    
+    target_dimensions = (
+        desc_overrides.get("target_dimensions") or 
+        orbit_context.get("target_dimensions") or 
+        repo_config.get("target_dimensions")
+    )
     
     _post_gitlab_issue_comment(
         issue_iid, token,
-        f"🔍 **Queried GitLab Orbit for context**:\n"
+        f"🔍 **Resolved GitLab Orbit & Duo context**:\n"
         f"- Target folder: `{target_folder}`\n"
-        f"- Style constraint: `{art_style}`\n"
-        f"- Bounding limits (X/Y/Z): `{target_dimensions}`"
+        f"- Style constraint: `{art_style or '[Pending AI Inference]'}`\n"
+        f"- Bounding limits: `{target_dimensions or '[Pending AI Inference]'}`"
     )
 
     # Step C: Construct enriched_prompt
@@ -322,7 +429,7 @@ def execute_meshgen_pipeline(user_prompt: str) -> int:
     print("                     MESHGEN PIPELINE OUTPUT                      ")
     print("==================================================================")
     print(f"Enriched Prompt:    {enriched_prompt}")
-    print(f"Target Dimensions:  {target_dimensions}")
+    print(f"Target Dimensions:  {target_dimensions or '[To be inferred by Gemini]'}")
     print(f"Target Folder:      {target_folder}")
     print("==================================================================\n")
 
@@ -330,23 +437,65 @@ def execute_meshgen_pipeline(user_prompt: str) -> int:
     logger.info("Generating reference image via Gemini on Modal...")
     _post_gitlab_issue_comment(issue_iid, token, "📷 **Generating reference image via Gemini** (text → concept image for Trellis input)...")
     
+    ref_image_b64 = ""
+    category = "prop"
+    subcategory = "general"
+    asset_filename = asset_name.lower().replace(" ", "_")
+    inferred_dimensions = [800.0, 400.0, 300.0]
+    inferred_poly_count = 3000
+
     try:
         import modal
         ref_func = modal.Function.from_name("gitmesh-compute", "generate_reference_image")
         ref_result = ref_func.remote(
             prompt=enriched_prompt,
-            issue_desc=os.getenv("ISSUE_DESC", ""),
+            issue_desc=issue_desc_env,
         )
         ref_status = ref_result.get("status", "unknown")
         enhanced_prompt = ref_result.get("enhanced_prompt", enriched_prompt)
+        ref_image_b64 = ref_result.get("image_base64", "")
+        category = ref_result.get("category", "prop")
+        subcategory = ref_result.get("subcategory", "general")
+        asset_filename = ref_result.get("filename", asset_name.lower().replace(" ", "_"))
+        inferred_dimensions = ref_result.get("inferred_dimensions", [800.0, 400.0, 300.0])
+        inferred_poly_count = ref_result.get("inferred_poly_count", 3000)
+        
         logger.info("Reference image generation status: %s (enhanced prompt: '%s')", ref_status, enhanced_prompt[:100])
-        _post_gitlab_issue_comment(
-            issue_iid, token,
-            f"✅ **Reference image generated.** Enhanced prompt: `{enhanced_prompt[:120]}`"
+        
+        # Save reference image locally and upload to GitLab to render in comments
+        image_markdown = ""
+        if ref_image_b64:
+            local_ref_path = "reference.png"
+            try:
+                with open(local_ref_path, "wb") as f:
+                    f.write(base64.b64decode(ref_image_b64))
+                uploaded_md = upload_file_to_gitlab(project_id, local_ref_path, token)
+                if uploaded_md:
+                    image_markdown = f"\n\n{uploaded_md}"
+            except Exception as img_save_err:
+                logger.error("Failed to save or upload local reference image: %s", img_save_err)
+        
+        comment_body = (
+            f"✅ **Reference image generated via Gemini.**{image_markdown}\n\n"
+            f"- Enhanced prompt: `{enhanced_prompt[:120]}`\n"
+            f"- Classified Category: `{category}/{subcategory}`\n"
+            f"- File Name: `{asset_filename}.glb`"
         )
+        _post_gitlab_issue_comment(issue_iid, token, comment_body)
     except Exception as exc:
         logger.warning("Reference image generation failed: %s. Trellis will use procedural fallback.", exc)
         _post_gitlab_issue_comment(issue_iid, token, f"⚠️ Reference image generation failed: `{exc}`. Trellis will use procedural fallback.")
+
+    # Apply Gemini-inferred values if constraints are still unresolved
+    if not art_style:
+        art_style = "lowpoly"
+        logger.info("Using default style: %s", art_style)
+    if target_dimensions is None:
+        target_dimensions = inferred_dimensions
+        logger.info("Using Gemini-inferred target dimensions: %s", target_dimensions)
+    if max_poly_count is None:
+        max_poly_count = inferred_poly_count
+        logger.info("Using Gemini-inferred max polygon limit: %s", max_poly_count)
 
     # Step E: Trigger Trellis 3D mesh generation on Modal
     logger.info("Triggering TRELLIS 3D generation on Modal...")
@@ -358,8 +507,9 @@ def execute_meshgen_pipeline(user_prompt: str) -> int:
         mesh_func = modal.Function.from_name("gitmesh-compute", "generate_3d_mesh")
         result = mesh_func.remote(
             prompt=asset_name,
-            style=art_style or "lowpoly",
-            target_dimensions=target_dimensions
+            style=art_style,
+            target_dimensions=target_dimensions,
+            image_base64=ref_image_b64
         )
     except Exception as exc:
         logger.error("Failed to run remote Modal execution: %s. Using mock fallback.", exc)
@@ -386,7 +536,8 @@ def execute_meshgen_pipeline(user_prompt: str) -> int:
             f.write(base64.b64decode(glb_b64))
 
     # Step F: Commit & Merge Request write-back
-    target_repo_path = f"{target_folder.strip('/')}/generated_mesh.glb"
+    base_folder = target_folder.strip("/")
+    target_repo_path = f"{base_folder}/{category}/{subcategory}/{asset_filename}.glb"
     
     try:
         logger.info("Initiating GitLab MR write-back sequence...")

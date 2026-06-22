@@ -284,77 +284,18 @@ run_gitmesh_pipeline:
     fi
 
     if [ "${USE_AGENT_ORCHESTRATOR:-true}" = "true" ]; then
-      echo "============================================="
-      echo " GitMesh Agent Orchestrator enabled"
-      echo " AGENT_HARD_FAIL=${AGENT_HARD_FAIL:-true}"
-      echo "============================================="
+      echo "Running GitMesh Agent Orchestrator..."
       if python agent.py --remote-ci; then
         echo "Agent orchestrator completed successfully."
         exit 0
       else
         agent_status="$?"
-      fi
-
-      echo "Agent orchestrator failed with status ${agent_status}."
-      if [ -n "${ISSUE_IID:-}" ]; then
-        curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=⚠️ GitMesh agent orchestrator failed with status ${agent_status}. AGENT_HARD_FAIL=${AGENT_HARD_FAIL:-true} determines whether legacy fallback runs." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
-      fi
-      if [ "${AGENT_HARD_FAIL:-true}" = "true" ]; then
+        echo "Agent orchestrator failed with status ${agent_status}."
         exit "${agent_status}"
       fi
-      echo "AGENT_HARD_FAIL=false: falling back to direct Modal stage chain."
-    fi
-
-    echo "============================================="
-    echo " GitMesh v1.4 - 10-Stage AI Asset Pipeline"
-    echo " Triggered by Issue #${ISSUE_IID}"
-    echo " Prompt: ${ISSUE_TITLE}"
-    echo "============================================="
-    curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🚀 GitMesh Pipeline Started! Asset: ${ISSUE_TITLE} (Issue #${ISSUE_IID}, 10 stages)" "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
-    # Dependencies already installed at start of job
-    if [ "${SKIP_MODAL_SECRET_PREFLIGHT:-true}" != "true" ]; then
-      if ! modal secret list | grep -q "gitmesh-keys"; then
-        echo "Modal secret 'gitmesh-keys' was not found. Create it with GCP_PROJECT_ID, GCP_SERVICE_ACCOUNT_JSON, LLM_PROVIDER=vertex, and IMAGE_MODEL."
-        curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=❌ GitMesh preflight failed: Modal secret gitmesh-keys was not found. Configure remote Vertex credentials before retrying." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
-        exit 1
-      fi
     else
-      echo "Skipping modal secret list preflight (SKIP_MODAL_SECRET_PREFLIGHT=true)."
-    fi
-    curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=✅ GitMesh remote preflight passed: GitLab CI variables and Modal secret are configured for Vertex." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
-    if [ "${USE_SINGLE_CALL_PIPELINE:-false}" = "true" ]; then
-      curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=⚡ Single-call mode enabled: running pipeline in one Modal container to reduce orchestration overhead." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
-      modal run modal_app.py::run_full_pipeline --prompt "${ISSUE_TITLE}" --issue-desc "${ISSUE_DESC}" --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}" --fast-trellis-mode "${USE_FAST_TRELLIS_MODE}" --fast-render-mode "${USE_FAST_RENDER_MODE}"
-    else
-      curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🧠 Stage 1: Gemini Brain - Analyzing prompt and planning pipeline..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
-      curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=📷 Stage 2: Reference Image - Generating via configured Vertex image model..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
-      modal run modal_app.py::generate_reference_image --prompt "${ISSUE_TITLE}" --issue-desc "${ISSUE_DESC}" --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
-      curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🧊 Stage 3: Mesh Generation - Offloading to Modal GPU (L4)..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
-      modal run modal_app.py::generate_3d_mesh --prompt "${ISSUE_TITLE}" --issue-desc "${ISSUE_DESC}" --style "lowpoly" --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
-      curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🔍 Stage 3b: GLB Validation - Checking mesh integrity..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
-      modal run modal_app.py::validate_glb --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
-      curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=✂️ Stage 4: Segmentation - Running deterministic template-based cutting..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
-      modal run modal_app.py::segment_mesh --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
-      curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🔧 Stages 5-6: Blender - Cleaning edges and rendering parts..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
-      curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🏷️ Stage 7: Part Labeling - Classifying with Gemini Flash Lite..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
-      modal run modal_app.py::label_parts --asset-name "${ISSUE_TITLE}" --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
-      curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🎬 Stage 8: Animation Planning - Gemini Flash generating motion plan..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
-      modal run modal_app.py::generate_animation_plan --asset-name "${ISSUE_TITLE}" --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
-      curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=✅ Stage 9: Validation - Running geometric checks..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
-      modal run modal_app.py::validate_animation_plan --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
-      curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🎬 Stage 10: Final Export - Blender headless rendering..." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
-      modal run modal_app.py::animate_and_render_mesh --issue-iid "${ISSUE_IID}" --gitlab-token "${GITLAB_API_TOKEN}"
-    fi
-    echo "============================================="
-    echo " Pipeline Complete! Finalizing issue #${ISSUE_IID}"
-    echo "============================================="
-    curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=🏁 Pipeline Complete! All 10 stages finished. Asset: ${ISSUE_TITLE} - Status: Ready for review" "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
-    if [ "${AUTO_CLOSE_ISSUE:-true}" = "true" ]; then
-      echo "AUTO_CLOSE_ISSUE=true: closing issue #${ISSUE_IID}"
-      curl --request PUT --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "state_event=close" "${GITLAB_API_URL}/issues/${ISSUE_IID}"
-    else
-      echo "AUTO_CLOSE_ISSUE=false: leaving issue #${ISSUE_IID} open"
-      curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" --form "body=ℹ️ Auto-close disabled for this run (AUTO_CLOSE_ISSUE=false). Keeping issue open for manual review." "${GITLAB_API_URL}/issues/${ISSUE_IID}/notes"
+      echo "Error: Only the Agent Orchestrator execution path is supported in GitMesh: Orbit."
+      exit 1
     fi
   only:
     - triggers
