@@ -432,6 +432,8 @@ def execute_meshgen_pipeline(user_prompt: str) -> int:
         repo_config.get("target_dimensions")
     )
     
+    print(f"\n[🔍 ORBIT RAG] Found Constraints -> Dimensions: {target_dimensions or '[To be inferred by Gemini]'} | Style: {art_style or '[To be inferred by Gemini]'}\n")
+
     _post_gitlab_issue_comment(
         issue_iid, token,
         f"🔍 **Resolved GitLab Orbit & Duo context**:\n"
@@ -483,6 +485,7 @@ def execute_meshgen_pipeline(user_prompt: str) -> int:
         inferred_dimensions = ref_result.get("inferred_dimensions", [800.0, 400.0, 300.0])
         inferred_poly_count = ref_result.get("inferred_poly_count", 3000)
         
+        print(f"\n[🧠 DUO AI] Engineered Prompt -> {enhanced_prompt}\n")
         logger.info("Reference image generation status: %s (enhanced prompt: '%s')", ref_status, enhanced_prompt[:100])
         
         # Save reference image locally and upload to GitLab to render in comments
@@ -519,6 +522,8 @@ def execute_meshgen_pipeline(user_prompt: str) -> int:
     if max_poly_count is None:
         max_poly_count = inferred_poly_count
         logger.info("Using Gemini-inferred max polygon limit: %s", max_poly_count)
+
+    print(f"\n[⚡ SERVERLESS GPU] Routing task to Modal L4 (Style: {art_style} | Dimensions: {target_dimensions})...\n")
 
     # Step E: Trigger Trellis 3D mesh generation on Modal
     logger.info("Triggering TRELLIS 3D generation on Modal...")
@@ -575,10 +580,10 @@ def execute_meshgen_pipeline(user_prompt: str) -> int:
         )
         
         # Massive Success Message
-        print("\n" + "*"*80)
-        print("SUCCESS: GitMesh: Orbit Pipeline Completed successfully!")
-        print(f"Merge Request Link: {mr_url}")
-        print("*"*80 + "\n")
+        print("\n" + "🏆"*40)
+        print("🏆  SUCCESS: GitMesh: Orbit Pipeline Completed successfully!  🏆")
+        print(f"🏆  Merge Request Link: {mr_url}")
+        print("🏆"*40 + "\n")
         
         comment_body = f"🎉 **Merge Request created successfully!**\n\n- [View Merge Request]({mr_url})\n- Target path: `{target_repo_path}`"
         _post_gitlab_issue_comment(issue_iid, token, comment_body)
