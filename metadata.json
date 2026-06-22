@@ -9,6 +9,12 @@
       "asset_description": {
         "type": "string",
         "description": "A textual description of the 3D asset to generate (e.g., 'a rustic medieval treasure chest')"
+      },
+      "quality_mode": {
+        "type": "string",
+        "enum": ["low", "med", "high"],
+        "default": "med",
+        "description": "The visual quality/detail level for the 3D generator (low = fast and simple, med = default balance, high = full detail and slower)"
       }
     },
     "required": [

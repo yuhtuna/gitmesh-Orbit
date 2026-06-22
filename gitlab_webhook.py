@@ -138,6 +138,16 @@ async def gitlab_issue_listener(req: Request):
     target_gitlab_url = (record.get("gitlab_url") or gitlab_url).rstrip("/")
     ref = record.get("trigger_ref") or gitlab_trigger_ref
 
+    # Resolve quality mode from the request body or parse from user input
+    quality_mode = str(body.get("quality_mode") or "").strip().lower()
+    if not quality_mode and duo_content:
+        import re
+        q_match = re.search(r'(?:quality|quality_?mode|resolution)\s*:\s*(low|med|medium|high)', duo_content, re.I)
+        if q_match:
+            quality_mode = q_match.group(1).strip().lower()
+            if quality_mode == "medium":
+                quality_mode = "med"
+
     # Duplicate-run guard: if a pipeline for the same issue is already
     # pending/running, skip creating another one.
     if gitlab_api_token and issue_iid:
@@ -194,7 +204,7 @@ async def gitlab_issue_listener(req: Request):
     print(f"Triggering 3D Pipeline for prompt: {prompt} (target project {target_project_id})")
 
     url = f"{gitlab_url}/api/v4/projects/{gitlab_project_id}/trigger/pipeline"
-    form_data = urllib.parse.urlencode({
+    trigger_vars = {
         "token": gitlab_trigger_token,
         "ref": ref,
         "variables[ISSUE_TITLE]": prompt,
@@ -202,7 +212,11 @@ async def gitlab_issue_listener(req: Request):
         "variables[ISSUE_IID]": issue_iid,
         "variables[TARGET_PROJECT_ID]": target_project_id,
         "variables[TARGET_GITLAB_URL]": target_gitlab_url,
-    }).encode("utf-8")
+    }
+    if quality_mode in ("low", "med", "high"):
+        trigger_vars["variables[QUALITY_MODE]"] = quality_mode
+
+    form_data = urllib.parse.urlencode(trigger_vars).encode("utf-8")
 
     # Call out to GitLab CI API
     request = urllib.request.Request(url, data=form_data)
