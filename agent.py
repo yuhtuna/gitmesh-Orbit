@@ -543,19 +543,21 @@ def execute_meshgen_pipeline(user_prompt: str) -> int:
             "glb_base64": "TW9jayBHRkIgY29udGVudHM="  # Decodes to "Mock GFB contents"
         }
         
-    glb_path = result.get("glb_path", "mesh.glb")
+    glb_path_remote = result.get("glb_path", "mesh.glb")
     glb_b64 = result.get("glb_base64", "")
     
-    if not glb_b64 and not os.path.exists(glb_path):
+    # Create a safe local path instead of using the remote container's /mnt/data path
+    local_glb_path = os.path.basename(glb_path_remote)
+    
+    if not glb_b64 and not os.path.exists(local_glb_path):
         logger.error("TRELLIS generator failed to produce output.")
         _post_gitlab_issue_comment(issue_iid, token, "❌ **Mesh generation failed**: Trellis did not return valid file content.")
         return 1
         
-    # Write file to disk locally if returned via base64 to ensure create_gitlab_merge_request can read it
-    if not os.path.exists(glb_path) and glb_b64:
-        logger.info("Writing base64 GLB contents from Modal response to: %s", glb_path)
-        os.makedirs(os.path.dirname(glb_path) or ".", exist_ok=True)
-        with open(glb_path, "wb") as f:
+    # Write file to disk locally using the safe local path
+    if glb_b64:
+        logger.info("Writing base64 GLB contents from Modal response to: %s", local_glb_path)
+        with open(local_glb_path, "wb") as f:
             f.write(base64.b64decode(glb_b64))
 
     # Step F: Commit & Merge Request write-back
@@ -566,7 +568,7 @@ def execute_meshgen_pipeline(user_prompt: str) -> int:
         logger.info("Initiating GitLab MR write-back sequence...")
         mr_url = create_gitlab_merge_request(
             project_id=project_id,
-            local_file_path=glb_path,
+            local_file_path=local_glb_path,
             target_repo_path=target_repo_path,
             asset_name=asset_name,
             gitlab_token=token

@@ -1,4 +1,3 @@
 modal
 requests
-trimesh
 python-dotenv

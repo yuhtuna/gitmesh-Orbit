@@ -62,6 +62,7 @@ try:
 
     app = modal.App(name="gitmesh-compute")
     storage_volume = modal.Volume.from_name("gitmesh-storage", create_if_missing=True)
+    hf_volume = modal.Volume.from_name("huggingface-cache", create_if_missing=True)
 except ImportError:
     class MockApp:
         def function(self, *args, **kwargs):
@@ -70,6 +71,7 @@ except ImportError:
     app = MockApp()
     pipeline_image = None
     storage_volume = None
+    hf_volume = None
 
 GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "").strip()
 VERTEX_LOCATION = os.environ.get("VERTEX_LOCATION", "global")
@@ -224,9 +226,12 @@ def _generate_imagen_gemini_api(prompt: str, gemini_api_key: Optional[str] = Non
 @app.function(
     image=pipeline_image,
     gpu="L4",
-    timeout=300,
+    timeout=600,
     secrets=[modal.Secret.from_name("gitmesh-keys")] if modal else [],
-    volumes={"/mnt/data": storage_volume} if storage_volume else {}
+    volumes={
+        "/mnt/data": storage_volume,
+        "/root/.cache/huggingface": hf_volume
+    } if storage_volume and hf_volume else {}
 )
 def generate_reference_image(
     prompt: str,
@@ -334,7 +339,10 @@ def generate_reference_image(
     gpu="L4",
     timeout=600,
     secrets=[modal.Secret.from_name("gitmesh-keys")] if modal else [],
-    volumes={"/mnt/data": storage_volume} if storage_volume else {}
+    volumes={
+        "/mnt/data": storage_volume,
+        "/root/.cache/huggingface": hf_volume
+    } if storage_volume and hf_volume else {}
 )
 def generate_3d_mesh(
     prompt: str,
