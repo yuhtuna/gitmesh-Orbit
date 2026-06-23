@@ -76,92 +76,67 @@ def _close_gitlab_issue(issue_iid: str, token: str) -> None:
 def query_gitlab_orbit(project_id: str, query_text: str, gitlab_token: str) -> dict:
     """
     Query the GitLab Orbit RAG API to retrieve context related to the query_text.
-    Falls back to a default configuration on failure or empty results.
+    Uses the official POST /api/v4/orbit/query endpoint.
     """
-    fallback = {
-        "target_folder": "Content/Generated/",
-        "constraints": "None",
-        "target_dimensions": [800.0, 400.0, 300.0]
-    }
-    
-    encoded_project_id = urllib.parse.quote(project_id, safe='')
+    try:
+        pid_int = int(project_id.strip())
+    except Exception:
+        pid_int = 83609477
+        
     gitlab_url = os.getenv("GITLAB_URL", "https://gitlab.com").strip().rstrip("/")
-    url = f"{gitlab_url}/api/v4/projects/{encoded_project_id}/orbit/nodes"
+    url = f"{gitlab_url}/api/v4/orbit/query"
     
-    logger.info("Querying GitLab Orbit API: %s with query '%s'", url, query_text)
+    logger.info("Querying GitLab Orbit API graph at %s for project %s (query: '%s')", url, pid_int, query_text)
     
     headers = {
-        "PRIVATE-TOKEN": gitlab_token
+        "PRIVATE-TOKEN": gitlab_token,
+        "Content-Type": "application/json"
     }
-    params = {
-        "query": query_text
+    
+    # GraphQL-like Traversal Query to find WorkItems matching the query text
+    payload = {
+        "query": {
+            "query_type": "traversal",
+            "node": {
+                "id": "w",
+                "entity": "WorkItem",
+                "filters": {"title": query_text},
+                "columns": ["title", "description"]
+            }
+        },
+        "response_format": "raw"
     }
     
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=30)
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
         logger.info("Orbit API response status: %s", response.status_code)
         
         if response.status_code == 200:
             data = response.json()
-            logger.info("Successfully received Orbit context: %s", data)
+            result_data = data.get("result", {})
+            nodes = result_data.get("nodes", [])
+            logger.info("Successfully received Orbit context with %s matching nodes.", len(nodes))
             
             result = {}
-            if isinstance(data, dict):
-                if "target_folder" in data:
-                    result["target_folder"] = data["target_folder"]
-                elif "folder" in data:
-                    result["target_folder"] = data["folder"]
-                else:
-                    result["target_folder"] = "Content/Generated/"
-                    
-                if "max_poly_count" in data:
-                    result["max_poly_count"] = data["max_poly_count"]
-                elif "poly_limit" in data:
-                    result["max_poly_count"] = data["poly_limit"]
-                elif "polygon_limit" in data:
-                    result["max_poly_count"] = data["polygon_limit"]
-                    
-                if "art_style" in data:
-                    result["art_style"] = data["art_style"]
-                elif "style" in data:
-                    result["art_style"] = data["style"]
-                    
-                if "target_dimensions" in data:
-                    result["target_dimensions"] = data["target_dimensions"]
-                elif "dimensions" in data:
-                    result["target_dimensions"] = data["dimensions"]
-                    
-                for key in ["constraints", "style_constraints", "metadata"]:
-                    if key in data and isinstance(data[key], dict):
-                        nested = data[key]
-                        if "target_folder" in nested:
-                            result["target_folder"] = nested["target_folder"]
-                        if "max_poly_count" in nested:
-                            result["max_poly_count"] = nested["max_poly_count"]
-                        elif "poly_limit" in nested:
-                            result["max_poly_count"] = nested["poly_limit"]
-                        elif "polygon_limit" in nested:
-                            result["max_poly_count"] = nested["polygon_limit"]
-                        if "art_style" in nested:
-                            result["art_style"] = nested["art_style"]
-                        elif "style" in nested:
-                            result["art_style"] = nested["style"]
-                        if "target_dimensions" in nested:
-                            result["target_dimensions"] = nested["target_dimensions"]
-                        elif "dimensions" in nested:
-                            result["target_dimensions"] = nested["dimensions"]
-            
-            if "target_folder" not in result:
-                result["target_folder"] = "Content/Generated/"
-            if "target_dimensions" not in result:
-                result["target_dimensions"] = [800.0, 400.0, 300.0]
+            # Loop through returned nodes and extract properties/descriptions directly from node dictionary
+            for node in nodes:
+                desc = node.get("description", "")
+                title = node.get("title", "")
+                
+                # Check description and title for overrides (re-use parse_constraints_from_desc logic)
+                overrides = parse_constraints_from_desc(desc)
+                title_overrides = parse_constraints_from_desc(title)
+                
+                # Merge constraints
+                result.update(title_overrides)
+                result.update(overrides)
                 
             return result
         else:
-            logger.info("GitLab Orbit API offline or not configured for this project. Cascading to repository configuration...")
+            logger.info("GitLab Orbit API returned status %s. Cascading to repository configuration...", response.status_code)
             return {}
     except Exception as exc:
-        logger.debug("GitLab Orbit API query failed: %s. Cascading to repository configuration...", exc)
+        logger.info("GitLab Orbit API query failed: %s. Cascading to repository configuration...", exc)
         return {}
 
 def query_gitlab_repository_config(project_id: str, gitlab_token: str) -> dict:
