@@ -158,11 +158,11 @@ def query_gitlab_orbit(project_id: str, query_text: str, gitlab_token: str) -> d
                 
             return result
         else:
-            logger.warning("Orbit API returned non-200 code. Falling back to defaults: %s", response.text)
-            return fallback
+            logger.warning("Orbit API returned non-200 code. Falling back to repository config and defaults: %s", response.text)
+            return {}
     except Exception as exc:
-        logger.warning("Error querying GitLab Orbit API: %s. Using graceful fallback.", exc)
-        return fallback
+        logger.warning("Error querying GitLab Orbit API: %s. Using graceful fallback to repository config and defaults.", exc)
+        return {}
 
 def query_gitlab_repository_config(project_id: str, gitlab_token: str) -> dict:
     """
