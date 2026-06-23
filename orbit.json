@@ -1,0 +1,6 @@
+{
+  "target_folder": "Content/OrbitAssets/",
+  "art_style": "lowpoly",
+  "max_poly_count": 2000,
+  "target_dimensions": [600.0, 300.0, 800.0]
+}
