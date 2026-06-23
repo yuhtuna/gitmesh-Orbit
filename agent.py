@@ -158,10 +158,10 @@ def query_gitlab_orbit(project_id: str, query_text: str, gitlab_token: str) -> d
                 
             return result
         else:
-            logger.warning("Orbit API returned non-200 code. Falling back to repository config and defaults: %s", response.text)
+            logger.info("GitLab Orbit API offline or not configured for this project. Cascading to repository configuration...")
             return {}
     except Exception as exc:
-        logger.warning("Error querying GitLab Orbit API: %s. Using graceful fallback to repository config and defaults.", exc)
+        logger.debug("GitLab Orbit API query failed: %s. Cascading to repository configuration...", exc)
         return {}
 
 def query_gitlab_repository_config(project_id: str, gitlab_token: str) -> dict:
